@@ -1,0 +1,89 @@
+[project]
+classifiers = ["Private :: Do Not Upload"]
+name = "gcp-pub-sub-dishka"
+version = "0.1.0"
+description = "Google Cloud Platform - Pub/Sub: consumer and producer implementations with Dishka."
+readme = "README.md"
+authors = [
+    { name = "Kieran Gray", email = "gray.kieran@protonmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "dishka>=1.5.3",
+    "google-cloud-pubsub>=2.29.0",
+]
+
+[dependency-groups]
+test = [
+    "pytest-asyncio>=0.26.0",
+    "pytest>=8.3.5",
+    "pytest-cov>=6.1.1",
+]
+dev = [
+    "bandit<2.0.0,>=1.7.9",
+    "debugpy>=1.8.9",
+    "mypy<2.0.0,>=1.11.2",
+    "ruff<1.0.0,>=0.6.3",
+]
+[[tool.uv.index]]
+name = "fern-labour-packages"
+url = "https://europe-west2-python.pkg.dev/valued-vault-446719-t7/fern-labour-packages/simple/"
+publish-url = "https://europe-west2-python.pkg.dev/valued-vault-446719-t7/fern-labour-packages/"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.bandit.assert_used]
+skips = ['*_test.py', '*/test_*.py']
+
+[tool.bandit]
+skips = ["B101"]
+
+[tool.mypy]
+strict = true
+exclude = ["venv", ".venv", "alembic"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "ARG001", # unused arguments in functions
+]
+ignore = [
+    "B008",  # do not perform function calls in argument defaults
+    "B024",  # allow abstract base classes with no abstract methods or properties
+    "B904",  # Allow raising exceptions without from e, for HTTPException
+]
+
+[tool.ruff.lint.pyupgrade]
+# Preserve types, even if a file imports `from __future__ import annotations`.
+keep-runtime-typing = true
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "src",
+]
+testpaths = [
+    "tests",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+
+[tool.coverage.run]
+disable_warnings = ["no-data-collected"]
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
