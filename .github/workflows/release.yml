@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      # Publish on any tag starting with a `v`, e.g. v1.2.3
+      - v*
+
+jobs:
+  publish:
+    name: Publish to Artifact Registry
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.6.3"
+          enable-cache: true
+
+      - name: Build Package
+        run: uv build
+
+      - name: Smoke test
+        run: make ci-smoke-test
+      
+      - name: Google Auth
+        id: auth
+        uses: 'google-github-actions/auth@v2'
+        with:
+          token_format: 'access_token'
+          project_id: ${{ env.PROJECT_ID }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Publish
+        run: uv publish --index ${{ env.AR_URL }} --username oauth2accesstoken --password ${{ steps.auth.outputs.access_token }} --keyring-provider subprocess
