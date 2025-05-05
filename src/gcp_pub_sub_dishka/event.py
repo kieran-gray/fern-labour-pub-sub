@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any, Protocol, Self
 
+
 class Event(Protocol):
     """Base class for all events"""
 

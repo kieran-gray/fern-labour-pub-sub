@@ -2,23 +2,23 @@ import asyncio
 import json
 import logging
 from concurrent.futures import TimeoutError
-from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future as PubSubFuture
 
-# Assuming these exist or create simple placeholders for tests
 from gcp_pub_sub_dishka.event import Event
 from gcp_pub_sub_dishka.producer import FUTURE_TIMEOUT_SECONDS, PubSubEventProducer
+from tests.conftest import MockEvent
 
 MODULE_PATH = "gcp_pub_sub_dishka.producer"
 TEST_PROJECT_ID = "test-project"
 
 
 @pytest.fixture
-def mock_publisher_client():
+def mock_publisher_client() -> MagicMock:
     """Fixture for mocking PublisherClient."""
     mock_client = MagicMock(spec=pubsub_v1.PublisherClient)
     # Mock the topic_path method
@@ -32,7 +32,7 @@ def mock_publisher_client():
 
 
 @pytest.fixture
-def mock_pubsub_future():
+def mock_pubsub_future() -> MagicMock:
     """Fixture for mocking PubSubFuture."""
     mock_future = MagicMock(spec=PubSubFuture)
     mock_future.result = Mock(return_value="mock-message-id")
@@ -41,23 +41,18 @@ def mock_pubsub_future():
 
 
 @pytest.fixture
-def producer(mock_publisher_client):
+def producer(mock_publisher_client: MagicMock) -> PubSubEventProducer:
     """Fixture for PubSubEventProducer with mocked client."""
     return PubSubEventProducer(project_id=TEST_PROJECT_ID, publisher=mock_publisher_client)
 
 
 @pytest.fixture
-def sample_event():
+def sample_event() -> Event:
     """Fixture for a sample Event."""
-    return Event(
-        id="evt-123",
-        type="sample.event-happened",
-        data={"key": "value"},
-        time=datetime(2020, 1, 1, 12),
-    )
+    return MockEvent.create(data={"key": "value"}, event_type="sample.event-happened")
 
 
-def test_producer_initialization(mock_publisher_client):
+def test_producer_initialization(mock_publisher_client: MagicMock) -> None:
     """Test producer initializes correctly with a provided client."""
     producer = PubSubEventProducer(project_id=TEST_PROJECT_ID, publisher=mock_publisher_client)
     assert producer._publisher == mock_publisher_client
@@ -65,7 +60,7 @@ def test_producer_initialization(mock_publisher_client):
 
 
 @patch(f"{MODULE_PATH}.pubsub_v1.PublisherClient", autospec=True)
-def test_producer_initialization_creates_client(MockPublisherClient):
+def test_producer_initialization_creates_client(MockPublisherClient: MagicMock) -> None:
     """Test producer initializes correctly and creates a client if none provided."""
     producer = PubSubEventProducer(project_id=TEST_PROJECT_ID)
     assert producer._project_id == TEST_PROJECT_ID
@@ -73,7 +68,7 @@ def test_producer_initialization_creates_client(MockPublisherClient):
     assert producer._publisher == MockPublisherClient.return_value
 
 
-def test_get_topic_path(producer: PubSubEventProducer, sample_event: Event):
+def test_get_topic_path(producer: PubSubEventProducer, sample_event: Event) -> None:
     """Test _get_topic_path generates the correct path."""
     expected_topic_id = "sample.event-happened"  # Lowercased, underscores to hyphens
     expected_path = f"projects/{TEST_PROJECT_ID}/topics/{expected_topic_id}"
@@ -82,7 +77,7 @@ def test_get_topic_path(producer: PubSubEventProducer, sample_event: Event):
     producer._publisher.topic_path.assert_called_once_with(TEST_PROJECT_ID, expected_topic_id)
 
 
-def test_serialize_event(producer: PubSubEventProducer, sample_event: Event):
+def test_serialize_event(producer: PubSubEventProducer, sample_event: Event) -> None:
     """Test _serialize_event correctly serializes the event."""
     expected_dict = {
         "id": "evt-123",
@@ -100,8 +95,8 @@ async def test_publish_success(
     mock_publisher_client: MagicMock,
     mock_pubsub_future: MagicMock,
     sample_event: Event,
-    caplog,
-):
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Test successful publish of a single event."""
     mock_publisher_client.publish.return_value = mock_pubsub_future
     topic_path = producer._get_topic_path(sample_event)
@@ -131,12 +126,12 @@ async def test_publish_timeout(
     mock_publisher_client: MagicMock,
     mock_pubsub_future: MagicMock,
     sample_event: Event,
-    caplog,
-):
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Test publish timeout scenario."""
     mock_publisher_client.publish.return_value = mock_pubsub_future
 
-    async def mock_executor_timeout(*_, **__):
+    async def mock_executor_timeout(*_: Any, **__: Any) -> None:
         raise TimeoutError("Simulated executor timeout")
 
     with patch("asyncio.get_running_loop") as mock_loop:
@@ -153,13 +148,13 @@ async def test_publish_general_exception(
     mock_publisher_client: MagicMock,
     mock_pubsub_future: MagicMock,
     sample_event: Event,
-    caplog,
-):
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Test publish with a general exception during result retrieval."""
     mock_publisher_client.publish.return_value = mock_pubsub_future
     test_exception = ValueError("Something went wrong")
 
-    async def mock_executor_value_error(*_, **__):
+    async def mock_executor_value_error(*_: Any, **__: Any) -> None:
         raise test_exception
 
     with patch("asyncio.get_running_loop") as mock_loop:
@@ -175,13 +170,11 @@ async def test_publish_batch_success(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
     sample_event: Event,
-    caplog,
-):
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Test successful publish of a batch of events."""
     event1 = sample_event
-    event2 = Event(
-        id="evt-456", type="Other.Event", data={"more": "data"}, time=datetime.now(UTC)
-    )
+    event2 = MockEvent.create(data={"more": "data"}, event_type="Other.Event")
     events = [event1, event2]
 
     future1 = MagicMock(spec=PubSubFuture)
@@ -190,7 +183,7 @@ async def test_publish_batch_success(
     future2.result = MagicMock(return_value="msg-id-2")
     mock_publisher_client.publish.side_effect = [future1, future2]
 
-    async def mock_executor(_, func, *args):
+    async def mock_executor(_: Any, func: Any, *args: Any) -> Any:
         return func(*args)
 
     with patch("asyncio.get_running_loop") as mock_loop:
@@ -206,23 +199,24 @@ async def test_publish_batch_partial_failure(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
     sample_event: Event,
-    caplog,
-):
-    """Test batch publish with one success and one timeout."""
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test batch publish with one success, one timeout, and one exception."""
     event1 = sample_event  # Will succeed
-    event2 = Event(
-        id="evt-456", type="Other.Event", data={"more": "data"}, time=datetime.now(UTC)
-    )
-    events = [event1, event2]
+    event2 = MockEvent.create(data={"more": "data"}, event_type="Other.Event")
+    event2.id = "evt-456"
+    event3 = MockEvent.create(data={"extra": "data"}, event_type="Another.Event")
+    events = [event1, event2, event3]
 
     future1 = MagicMock(spec=PubSubFuture)
     future1.result = MagicMock(return_value="msg-id-1")
     future2 = MagicMock(spec=PubSubFuture)
     future2.result = MagicMock(side_effect=TimeoutError("Timeout publishing evt-456"))
-    mock_publisher_client.publish.side_effect = [future1, future2]
+    future3 = MagicMock(spec=PubSubFuture)
+    future3.result = MagicMock(side_effect=Exception("Error"))
+    mock_publisher_client.publish.side_effect = [future1, future2, future3]
 
-    async def mock_executor_gather_safe(_, func, *args):
-        await asyncio.sleep(0.01)
+    async def mock_executor_gather_safe(_: Any, func: Any, *args: Any) -> Any:
         try:
             return func(*args)
         except Exception as e:
@@ -233,13 +227,34 @@ async def test_publish_batch_partial_failure(
         with caplog.at_level(logging.INFO):
             await producer.publish_batch(events)
 
-        assert mock_publisher_client.publish.call_count == 2
-        assert "Successfully published 1 out of 2 events in the batch." in caplog.text
-        assert "Failed to publish 1 out of 2 events in the batch." in caplog.text
+        assert mock_publisher_client.publish.call_count == 3
+        assert "Successfully published 1 out of 3 events in the batch." in caplog.text
+        assert "Failed to publish 2 out of 3 events in the batch." in caplog.text
         assert "Timed out publishing event evt-456" in caplog.text
 
 
-async def test_publish_batch_empty(producer: PubSubEventProducer, caplog):
+async def test_publish_batch_failure(
+    producer: PubSubEventProducer,
+    mock_publisher_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test batch publish with two failures."""
+    event1 = MockEvent.create(data={"some": "data"}, event_type="First.Event")
+    event2 = MockEvent.create(data={"more": "data"}, event_type="Other.Event")
+    events = [event1, event2]
+
+    mock_publisher_client.publish = Mock(side_effect=Exception("test"))
+
+    with caplog.at_level(logging.WARNING):
+        await producer.publish_batch(events)
+
+    assert mock_publisher_client.publish.call_count == 2
+    assert "No publish tasks were successfully created for the batch." in caplog.text
+
+
+async def test_publish_batch_empty(
+    producer: PubSubEventProducer, caplog: pytest.LogCaptureFixture
+) -> None:
     """Test publishing an empty batch."""
     with caplog.at_level(logging.DEBUG):
         await producer.publish_batch([])
@@ -250,14 +265,12 @@ async def test_publish_batch_error_during_dispatch(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
     sample_event: Event,
-    caplog,
-):
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Test batch publish where an error occurs during the initial publish call
     for one event, but the other succeeds."""
     event1 = sample_event  # Will fail during dispatch
-    event2 = Event(
-        id="evt-456", type="Other.Event", data={"more": "data"}, time=datetime(2020, 1, 1, 12)
-    )  # Will succeed
+    event2 = MockEvent.create(data={"more": "data"}, event_type="Other.Event")
     events = [event1, event2]
 
     mock_future_2 = MagicMock(spec=PubSubFuture)
@@ -265,7 +278,7 @@ async def test_publish_batch_error_during_dispatch(
 
     mock_publisher_client.publish.side_effect = [ValueError("Setup failed"), mock_future_2]
 
-    async def mock_executor_gather_safe(_, func, *args):
+    async def mock_executor_gather_safe(_: Any, func: Any, *args: Any) -> Any:
         await asyncio.sleep(0.01)
         return func(*args)
 

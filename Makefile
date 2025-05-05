@@ -1,5 +1,5 @@
 SRC_DIR=src
-TEST_DIR=tests
+TEST_DIR=src/tests
 PYPROJECT_TOML=pyproject.toml
 
 # Source code formatting and linting
@@ -24,4 +24,3 @@ test:
 
 test-debug:
 	uv run debugpy --listen 0.0.0.0:5678 --wait-for-client -m pytest $(TEST_DIR) -v
-

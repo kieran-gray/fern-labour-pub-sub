@@ -1,8 +1,8 @@
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 from concurrent.futures import TimeoutError
-from typing import Sequence
 
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future

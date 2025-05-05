@@ -1,7 +1,7 @@
 [project]
 classifiers = ["Private :: Do Not Upload"]
 name = "gcp-pub-sub-dishka"
-version = "0.1.0"
+version = "0.2.0"
 description = "Google Cloud Platform - Pub/Sub: consumer and producer implementations with Dishka."
 readme = "README.md"
 authors = [
@@ -76,14 +76,14 @@ pythonpath = [
     "src",
 ]
 testpaths = [
-    "tests",
+    "src/tests",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 
 [tool.coverage.run]
 disable_warnings = ["no-data-collected"]
-source = ["src"]
+source = ["src/gcp_pub_sub_dishka"]
 
 [tool.coverage.report]
 show_missing = true

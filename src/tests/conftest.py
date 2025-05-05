@@ -1,0 +1,91 @@
+from collections.abc import AsyncGenerator, Iterable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Self
+
+import pytest_asyncio
+from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
+
+from gcp_pub_sub_dishka.event import Event
+from gcp_pub_sub_dishka.event_handler import EventHandler
+
+
+@dataclass
+class MockEvent(Event):
+    id: str
+    type: str
+    data: dict[str, Any]
+    time: datetime
+
+    @classmethod
+    def create(cls, data: dict[str, Any], event_type: str = "") -> Self:
+        return cls(
+            id="evt-123",
+            type=event_type,
+            data=data,
+            time=datetime(2020, 1, 1, 12),
+        )
+
+    @classmethod
+    def from_dict(cls, event: dict[str, Any]) -> Self:
+        return cls(
+            id=event["id"],
+            type=event["type"],
+            data=event["data"],
+            time=datetime.fromisoformat(event["time"]),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "type": self.type, "data": self.data, "time": self.time.isoformat()}
+
+
+class MockDefaultEventHandler(EventHandler):
+    async def handle(self, event: dict[str, Any]) -> None:
+        return
+
+
+class MockEventHandler(EventHandler):
+    async def handle(self, event: dict[str, Any]) -> None:
+        return
+
+
+class MockFailedEventHandler(EventHandler):
+    async def handle(self, event: dict[str, Any]) -> None:
+        raise Exception("Test")
+
+
+class MockDefaultProvider(Provider):
+    scope = Scope.APP
+    component = ""
+
+    @provide
+    def get_mock_default_event_handler(self) -> MockDefaultEventHandler:
+        return MockDefaultEventHandler()
+
+
+class MockEventHandlerProvider(Provider):
+    scope = Scope.APP
+    component = "event_handlers"
+
+    @provide
+    def get_mock_event_handler(self) -> MockEventHandler:
+        return MockEventHandler()
+
+    @provide
+    def get_mock_failed_event_handler(self) -> MockFailedEventHandler:
+        return MockFailedEventHandler()
+
+
+def get_providers() -> Iterable[Provider]:
+    return (
+        MockDefaultProvider(),
+        MockEventHandlerProvider(),
+    )
+
+
+@pytest_asyncio.fixture(scope="session")
+async def container() -> AsyncGenerator[AsyncContainer]:
+    """Create a test dishka container."""
+    container = make_async_container(*get_providers())
+    yield container
+    await container.close()

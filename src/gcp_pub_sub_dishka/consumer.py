@@ -8,7 +8,8 @@ from dishka import AsyncContainer, Scope
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.futures import StreamingPullFuture
 from google.cloud.pubsub_v1.subscriber.message import Message
-from gcp_pub_sub_dishka.event_handler import EventHandler
+
+from gcp_pub_sub_dishka.event_handler import TopicHandler
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class PubSubEventConsumer:
     def __init__(
         self,
         project_id: str,
-        topic_handlers: dict[str, type[EventHandler]],
+        topic_handlers: list[TopicHandler],
         subscriber: pubsub_v1.SubscriberClient | None = None,
     ):
         """
@@ -34,12 +35,11 @@ class PubSubEventConsumer:
         """
         self._project_id = project_id
         self._subscriber = subscriber or pubsub_v1.SubscriberClient()
-        self._handlers: dict[str, type[EventHandler]] = {
-            f"{topic}.sub": handler for topic, handler in topic_handlers.items()
+        self._handlers: dict[str, TopicHandler] = {
+            handler.sub: handler for handler in topic_handlers
         }
         self._running = False
         self._container: AsyncContainer | None = None
-        self._event_handler_component: str | None = None
         self._streaming_pull_futures: dict[str, StreamingPullFuture] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tasks: set[Future[None]] = set()
@@ -53,16 +53,6 @@ class PubSubEventConsumer:
         """
         self._container = container
         log.info("Dependency injection container set for PubSubEventConsumer.")
-
-    def set_event_handler_component(self, component: str) -> None:
-        """
-        Set the dependency injection container component containing event handlers.
-
-        Args:
-            component: Component Enum
-        """
-        self._event_handler_component = component
-        log.info("Dependency injection container component set for PubSubEventConsumer.")
 
     def _get_subscription_path(self, topic: str) -> str:
         """
@@ -89,8 +79,8 @@ class PubSubEventConsumer:
             return
 
         subscription = f"{topic}.sub"
-        handler_cls = self._handlers.get(subscription)
-        if not handler_cls:
+        topic_handler = self._handlers.get(subscription)
+        if not topic_handler:
             log.error(
                 "No handler found for message from subscription related to ack_id: "
                 f"{message.ack_id}. Attempted path match: {subscription}"
@@ -108,7 +98,7 @@ class PubSubEventConsumer:
         try:
             async with self._container(scope=Scope.REQUEST) as request_container:
                 event_handler = await request_container.get(
-                    handler_cls, component=self._event_handler_component
+                    topic_handler.event_handler, component=topic_handler.component
                 )
                 await event_handler.handle(event)
             message.ack()
@@ -184,8 +174,9 @@ class PubSubEventConsumer:
         self._streaming_pull_futures.clear()
         log.info(f"Starting PubSubEventConsumer for project {self._project_id}...")
 
-        for subscription in self._handlers.keys():
-            topic = subscription.split(".sub")[0]  # TODO make function
+        for topic_handler in self._handlers.values():
+            subscription = topic_handler.sub
+            topic = topic_handler.topic
             log.info(f"Attempting to subscribe to: {subscription} (for topic: {topic})")
 
             try:
