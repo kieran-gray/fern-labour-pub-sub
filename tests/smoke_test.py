@@ -1,15 +1,15 @@
-from gcp_pub_sub_dishka.producer import PubSubEventProducer
 from gcp_pub_sub_dishka.consumer import PubSubEventConsumer
+from gcp_pub_sub_dishka.producer import PubSubEventProducer
 
 
-def can_instantiate_producer():
+def can_instantiate_producer() -> None:
     producer = PubSubEventProducer(project_id="test")
     if not producer:
         raise RuntimeError("Producer instantiation failed.")
     print("Instantiated Producer successfully.")
 
 
-def can_instantiate_consumer():
+def can_instantiate_consumer() -> None:
     consumer = PubSubEventConsumer(project_id="test", topic_handlers=[])
     if not consumer:
         raise RuntimeError("Consumer instantiation failed.")
