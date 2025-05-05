@@ -1,7 +1,7 @@
 [project]
 classifiers = ["Private :: Do Not Upload"]
 name = "gcp-pub-sub-dishka"
-version = "0.2.0"
+version = "0.2.1"
 description = "Google Cloud Platform - Pub/Sub: consumer and producer implementations with Dishka."
 readme = "README.md"
 authors = [

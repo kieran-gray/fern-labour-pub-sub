@@ -31,7 +31,7 @@ test-debug:
 smoke-test:
 	uv run $(TEST_DIR)/smoke_test.py
 
-ci-smoke-tests:
+ci-smoke-test:
 	@echo "Running smoke tests on wheel"
 	uv run --isolated --no-project -p 3.12 --with dist/*.whl tests/smoke_test.py
 	@echo "Running smoke tests on source distribution"
