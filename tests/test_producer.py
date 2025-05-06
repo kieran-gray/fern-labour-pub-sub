@@ -6,14 +6,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from fern_labour_core.events.event import DomainEvent
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future as PubSubFuture
 
-from gcp_pub_sub_dishka.event import Event
-from gcp_pub_sub_dishka.producer import FUTURE_TIMEOUT_SECONDS, PubSubEventProducer
+from fern_labour_pub_sub.producer import FUTURE_TIMEOUT_SECONDS, PubSubEventProducer
 from tests.conftest import MockEvent
 
-MODULE_PATH = "gcp_pub_sub_dishka.producer"
+MODULE_PATH = "fern_labour_pub_sub.producer"
 TEST_PROJECT_ID = "test-project"
 
 
@@ -47,7 +47,7 @@ def producer(mock_publisher_client: MagicMock) -> PubSubEventProducer:
 
 
 @pytest.fixture
-def sample_event() -> Event:
+def sample_event() -> DomainEvent:
     """Fixture for a sample Event."""
     return MockEvent.create(data={"key": "value"}, event_type="sample.event-happened")
 
@@ -68,7 +68,7 @@ def test_producer_initialization_creates_client(MockPublisherClient: MagicMock) 
     assert producer._publisher == MockPublisherClient.return_value
 
 
-def test_get_topic_path(producer: PubSubEventProducer, sample_event: Event) -> None:
+def test_get_topic_path(producer: PubSubEventProducer, sample_event: DomainEvent) -> None:
     """Test _get_topic_path generates the correct path."""
     expected_topic_id = "sample.event-happened"  # Lowercased, underscores to hyphens
     expected_path = f"projects/{TEST_PROJECT_ID}/topics/{expected_topic_id}"
@@ -77,7 +77,7 @@ def test_get_topic_path(producer: PubSubEventProducer, sample_event: Event) -> N
     producer._publisher.topic_path.assert_called_once_with(TEST_PROJECT_ID, expected_topic_id)
 
 
-def test_serialize_event(producer: PubSubEventProducer, sample_event: Event) -> None:
+def test_serialize_event(producer: PubSubEventProducer, sample_event: DomainEvent) -> None:
     """Test _serialize_event correctly serializes the event."""
     expected_dict = {
         "id": "evt-123",
@@ -94,7 +94,7 @@ async def test_publish_success(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
     mock_pubsub_future: MagicMock,
-    sample_event: Event,
+    sample_event: DomainEvent,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test successful publish of a single event."""
@@ -125,7 +125,7 @@ async def test_publish_timeout(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
     mock_pubsub_future: MagicMock,
-    sample_event: Event,
+    sample_event: DomainEvent,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test publish timeout scenario."""
@@ -147,7 +147,7 @@ async def test_publish_general_exception(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
     mock_pubsub_future: MagicMock,
-    sample_event: Event,
+    sample_event: DomainEvent,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test publish with a general exception during result retrieval."""
@@ -169,7 +169,7 @@ async def test_publish_general_exception(
 async def test_publish_batch_success(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
-    sample_event: Event,
+    sample_event: DomainEvent,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test successful publish of a batch of events."""
@@ -198,7 +198,7 @@ async def test_publish_batch_success(
 async def test_publish_batch_partial_failure(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
-    sample_event: Event,
+    sample_event: DomainEvent,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test batch publish with one success, one timeout, and one exception."""
@@ -264,7 +264,7 @@ async def test_publish_batch_empty(
 async def test_publish_batch_error_during_dispatch(
     producer: PubSubEventProducer,
     mock_publisher_client: MagicMock,
-    sample_event: Event,
+    sample_event: DomainEvent,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test batch publish where an error occurs during the initial publish call

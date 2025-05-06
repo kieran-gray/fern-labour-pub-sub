@@ -4,10 +4,9 @@ import logging
 from collections.abc import Sequence
 from concurrent.futures import TimeoutError
 
+from fern_labour_core.events.event import DomainEvent
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future
-
-from gcp_pub_sub_dishka.event import Event
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class PubSubEventProducer:
         self._project_id = project_id
         self._retries = retries
 
-    def _get_topic_path(self, event: Event) -> str:
+    def _get_topic_path(self, event: DomainEvent) -> str:
         """
         Generate full Pub/Sub topic path based on event type.
 
@@ -52,7 +51,7 @@ class PubSubEventProducer:
         """
         return str(self._publisher.topic_path(self._project_id, event.type.lower()))
 
-    def _serialize_event(self, event: Event) -> bytes:
+    def _serialize_event(self, event: DomainEvent) -> bytes:
         """
         Serialize event data to bytes for Pub/Sub.
 
@@ -64,7 +63,7 @@ class PubSubEventProducer:
         """
         return json.dumps(event.to_dict()).encode("utf-8")
 
-    async def publish(self, event: Event) -> None:
+    async def publish(self, event: DomainEvent) -> None:
         """
         Publish a single event to Pub/Sub.
 
@@ -86,7 +85,7 @@ class PubSubEventProducer:
         except Exception as e:
             log.critical(f"Unexpected error while publishing event {event.id}", exc_info=e)
 
-    async def publish_batch(self, events: Sequence[Event]) -> None:
+    async def publish_batch(self, events: Sequence[DomainEvent]) -> None:
         """
         Publish multiple events to Pub/Sub.
 

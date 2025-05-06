@@ -1,7 +1,7 @@
 [project]
 classifiers = ["Private :: Do Not Upload"]
-name = "gcp-pub-sub-dishka"
-version = "0.2.1"
+name = "fern-labour-pub-sub"
+version = "0.3.0"
 description = "Google Cloud Platform - Pub/Sub: consumer and producer implementations with Dishka."
 readme = "README.md"
 authors = [
@@ -10,6 +10,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "dishka>=1.5.3",
+    "fern-labour-core>=0.1.0",
     "google-cloud-pubsub>=2.29.0",
 ]
 
@@ -25,6 +26,9 @@ dev = [
     "mypy<2.0.0,>=1.11.2",
     "ruff<1.0.0,>=0.6.3",
 ]
+[tool.uv.sources]
+fern-labour-core = { index = "fern-labour-packages" }
+
 [[tool.uv.index]]
 name = "fern-labour-packages"
 url = "https://europe-west2-python.pkg.dev/valued-vault-446719-t7/fern-labour-packages/simple/"
@@ -83,7 +87,7 @@ asyncio_default_fixture_loop_scope = "session"
 
 [tool.coverage.run]
 disable_warnings = ["no-data-collected"]
-source = ["src/gcp_pub_sub_dishka"]
+source = ["src/fern_labour_pub_sub"]
 
 [tool.coverage.report]
 show_missing = true

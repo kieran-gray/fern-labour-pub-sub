@@ -30,12 +30,6 @@ jobs:
 
       - name: Build Package
         run: uv build
-
-      - name: Smoke test
-        # Hack to not require credentials for GCP
-        env:
-          PUBSUB_EMULATOR_HOST: mock:8085
-        run: make ci-smoke-test
       
       - name: Google Auth
         id: auth

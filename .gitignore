@@ -182,3 +182,4 @@ backup.sql
 deployment/
 
 .pytest_cache
+.artifact-registry-token
