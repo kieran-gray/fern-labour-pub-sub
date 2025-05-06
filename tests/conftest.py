@@ -5,13 +5,12 @@ from typing import Any, Self
 
 import pytest_asyncio
 from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
-
-from gcp_pub_sub_dishka.event import Event
-from gcp_pub_sub_dishka.event_handler import EventHandler
+from fern_labour_core.events.event import DomainEvent
+from fern_labour_core.events.event_handler import EventHandler
 
 
 @dataclass
-class MockEvent(Event):
+class MockEvent(DomainEvent):
     id: str
     type: str
     data: dict[str, Any]

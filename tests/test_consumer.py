@@ -13,8 +13,8 @@ from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.futures import StreamingPullFuture
 from google.cloud.pubsub_v1.subscriber.message import Message
 
-from gcp_pub_sub_dishka.consumer import PubSubEventConsumer
-from gcp_pub_sub_dishka.event_handler import TopicHandler
+from fern_labour_pub_sub.consumer import PubSubEventConsumer
+from fern_labour_pub_sub.topic_handler import TopicHandler
 from tests.conftest import (
     MockDefaultEventHandler,
     MockEvent,
@@ -22,7 +22,7 @@ from tests.conftest import (
     MockFailedEventHandler,
 )
 
-MODULE_PATH = "gcp_pub_sub_dishka.consumer"
+MODULE_PATH = "fern_labour_pub_sub.consumer"
 TEST_PROJECT_ID = "test-project"
 
 

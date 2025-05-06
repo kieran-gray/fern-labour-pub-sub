@@ -27,15 +27,6 @@ jobs:
         with:
           version: "0.6.3"
           enable-cache: true
-
-      - name: Build Package
-        run: uv build
-
-      - name: Smoke test
-        # Hack to not require credentials for GCP
-        env:
-          PUBSUB_EMULATOR_HOST: mock:8085
-        run: make ci-smoke-test
       
       - name: Google Auth
         id: auth
@@ -45,6 +36,9 @@ jobs:
           project_id: ${{ vars.PROJECT_ID }}
           service_account: ${{ vars.SERVICE_ACCOUNT }}
           workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+
+      - name: Build Package
+        run: uv build
 
       - name: Publish
         run: uv publish --index ${{ vars.AR_URL }} --username oauth2accesstoken --password ${{ steps.auth.outputs.access_token }} --keyring-provider subprocess

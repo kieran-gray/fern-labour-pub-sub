@@ -9,7 +9,7 @@ from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.futures import StreamingPullFuture
 from google.cloud.pubsub_v1.subscriber.message import Message
 
-from gcp_pub_sub_dishka.event_handler import TopicHandler
+from fern_labour_pub_sub.topic_handler import TopicHandler
 
 log = logging.getLogger(__name__)
 

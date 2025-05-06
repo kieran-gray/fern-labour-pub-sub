@@ -1,12 +1,6 @@
 from dataclasses import dataclass
-from typing import Any, Protocol
 
-
-class EventHandler(Protocol):
-    """Protocol for event handlers"""
-
-    async def handle(self, event: dict[str, Any]) -> None:
-        """Handle the event."""
+from fern_labour_core.events.event_handler import EventHandler
 
 
 @dataclass

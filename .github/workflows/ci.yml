@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -24,9 +28,18 @@ jobs:
         with:
           version: "0.6.3"
           enable-cache: true
+      
+      - name: Google Auth
+        id: auth
+        uses: 'google-github-actions/auth@v2'
+        with:
+          token_format: 'access_token'
+          project_id: ${{ vars.PROJECT_ID }}
+          service_account: ${{ vars.SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
 
       - name: Install dependencies
-        run: uv sync --all-groups
+        run: make deps
 
       - name: Run Tests
         run: make test

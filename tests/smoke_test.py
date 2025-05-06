@@ -1,5 +1,5 @@
-from gcp_pub_sub_dishka.consumer import PubSubEventConsumer
-from gcp_pub_sub_dishka.producer import PubSubEventProducer
+from fern_labour_pub_sub.consumer import PubSubEventConsumer
+from fern_labour_pub_sub.producer import PubSubEventProducer
 
 
 def can_instantiate_producer() -> None:
