@@ -10,7 +10,7 @@ from fern_labour_core.events.event import DomainEvent
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future as PubSubFuture
 
-from fern_labour_pub_sub.producer import FUTURE_TIMEOUT_SECONDS, PubSubEventProducer
+from fern_labour_pub_sub.producer import PubSubEventProducer
 from tests.conftest import MockEvent
 
 MODULE_PATH = "fern_labour_pub_sub.producer"
@@ -113,7 +113,7 @@ async def test_publish_success(
             topic_path, data=event_data_bytes, **attributes
         )
         mock_loop.return_value.run_in_executor.assert_called_once_with(
-            None, mock_pubsub_future.result, FUTURE_TIMEOUT_SECONDS
+            None, mock_pubsub_future.result, 30
         )
         assert (
             f"Published event {sample_event.id} to {topic_path} with message ID mock-message-id"

@@ -10,8 +10,6 @@ from google.cloud.pubsub_v1.publisher.futures import Future
 
 log = logging.getLogger(__name__)
 
-FUTURE_TIMEOUT_SECONDS = 30
-
 
 class PubSubEventProducer:
     """
@@ -26,6 +24,7 @@ class PubSubEventProducer:
         project_id: str,
         retries: int = 3,
         publisher: pubsub_v1.PublisherClient | None = None,
+        future_timeout_seconds: int = 30,
     ):
         """
         Initialize the PubSubEventProducer.
@@ -38,6 +37,7 @@ class PubSubEventProducer:
         self._publisher = publisher or pubsub_v1.PublisherClient()
         self._project_id = project_id
         self._retries = retries
+        self._future_timeout_seconds = future_timeout_seconds
 
     def _get_topic_path(self, event: DomainEvent) -> str:
         """
@@ -78,7 +78,9 @@ class PubSubEventProducer:
         try:
             future: Future = self._publisher.publish(topic_path, data=data, **attributes)
             loop = asyncio.get_running_loop()
-            message_id = await loop.run_in_executor(None, future.result, FUTURE_TIMEOUT_SECONDS)
+            message_id = await loop.run_in_executor(
+                None, future.result, self._future_timeout_seconds
+            )
             log.debug(f"Published event {event.id} to {topic_path} with message ID {message_id}")
         except TimeoutError as e:
             log.critical(f"Timeout error while publishing event {event.id}", exc_info=e)
@@ -109,7 +111,7 @@ class PubSubEventProducer:
                 log.debug(f"Queueing event {event.id} for topic {topic_path}")
                 future: Future = self._publisher.publish(topic_path, data=data, **attributes)
 
-                task = loop.run_in_executor(None, future.result, FUTURE_TIMEOUT_SECONDS)
+                task = loop.run_in_executor(None, future.result, self._future_timeout_seconds)
                 publish_tasks.append(task)
                 event_details[task] = {"id": event.id, "topic": topic_path}
 
