@@ -237,13 +237,18 @@ class PubSubEventConsumer:
         for topic_handler in self._handlers.values():
             topic = topic_handler.topic
             subscription = topic_handler.sub
-            response = self._subscriber.pull(
-                request={
-                    "subscription": self._get_subscription_path(topic=topic),
-                    "max_messages": self._batch_max_messages,
-                    "return_immediately": True,
-                },
-            )
+            try:
+                response = self._subscriber.pull(
+                    request={
+                        "subscription": self._get_subscription_path(topic=topic),
+                        "max_messages": self._batch_max_messages,
+                        "return_immediately": True,
+                    },
+                )
+            except Exception as e:
+                log.exception(f"Failed to pull subscription {subscription}", exc_info=e)
+                continue
+
             if len(response.received_messages) == 0:
                 log.info(f"No messages pulled for subscription {subscription}")
                 continue
@@ -301,20 +306,21 @@ class PubSubEventConsumer:
             log.warning("Health check: Pub/Sub subscriber is not initialized.")
             return False
 
-        if not self._streaming_pull_futures:
-            log.warning("Health check: No active subscription futures.")
-            return False
+        if self._mode is ConsumerMode.STREAMING_PULL:
+            if not self._streaming_pull_futures:
+                log.warning("Health check: No active subscription futures.")
+                return False
 
-        any_running = False
-        for sub_path, future in self._streaming_pull_futures.items():
-            if future.running():
-                any_running = True
-                log.debug(f"Health check: Subscription {sub_path} future is running.")
+            any_running = False
+            for sub_path, future in self._streaming_pull_futures.items():
+                if future.running():
+                    any_running = True
+                    log.debug(f"Health check: Subscription {sub_path} future is running.")
 
-        if not any_running:
-            log.warning(
-                "Health check: Consumer is running, but no subscription futures are active."
-            )
-            return False
+            if not any_running:
+                log.warning(
+                    "Health check: Consumer is running, but no subscription futures are active."
+                )
+                return False
 
         return True
