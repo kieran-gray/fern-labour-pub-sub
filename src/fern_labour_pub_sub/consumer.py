@@ -9,6 +9,7 @@ from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.futures import StreamingPullFuture
 from google.cloud.pubsub_v1.subscriber.message import Message
 
+from fern_labour_pub_sub.enums import ConsumerMode
 from fern_labour_pub_sub.topic_handler import TopicHandler
 
 log = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ class PubSubEventConsumer:
         project_id: str,
         topic_handlers: list[TopicHandler],
         subscriber: pubsub_v1.SubscriberClient | None = None,
+        mode: ConsumerMode = ConsumerMode.STREAMING_PULL,
+        batch_max_messages: int = 50,
     ):
         """
         Initialize PubSubEventConsumer.
@@ -32,12 +35,26 @@ class PubSubEventConsumer:
             project_id: Google Cloud project ID.
             topic_prefix: Prefix for Pub/Sub topics.
             subscriber: Optional pre-configured SubscriberClient.
+            mode: Optional running mode
+            batch_max_messages: Optional max messages to process in a batch in UnaryPull mode
+
+        Consumer modes:
+            StreamingPull mode, consumer will:
+                - Subscribe to topics.
+                - Begin processing messages.
+                - Keep running until stop() is called.
+
+            UnaryPull mode, consumer will:
+                - Sequentially pull at most batch_max_messages for each subscription.
+                - Close on completion.
         """
         self._project_id = project_id
         self._subscriber = subscriber or pubsub_v1.SubscriberClient()
         self._handlers: dict[str, TopicHandler] = {
             handler.sub: handler for handler in topic_handlers
         }
+        self._mode = mode
+        self._batch_max_messages = batch_max_messages
         self._running = False
         self._container: AsyncContainer | None = None
         self._streaming_pull_futures: dict[str, StreamingPullFuture] = {}
@@ -154,8 +171,7 @@ class PubSubEventConsumer:
 
     async def start(self) -> None:
         """
-        Start the Pub/Sub consumer, subscribe to topics, and begin processing messages.
-        Keeps running until stop() is called.
+        Start the Pub/Sub consumer.
         """
         if self._running:
             log.warning("Consumer is already running.")
@@ -169,6 +185,13 @@ class PubSubEventConsumer:
             log.error("Dependency injection container not set. Cannot start consumer.")
             return
 
+        if self._mode is ConsumerMode.STREAMING_PULL:
+            await self._start_streaming_pull_consumer()
+        elif self._mode is ConsumerMode.UNARY_PULL:
+            with self._subscriber:
+                await self._run_unary_pull_consumer()
+
+    async def _start_streaming_pull_consumer(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._running = True
         self._streaming_pull_futures.clear()
@@ -209,6 +232,24 @@ class PubSubEventConsumer:
             if self._running and not self._streaming_pull_futures:
                 log.warning("Consumer is running but has no active subscriptions left. Stopping.")
                 await self.stop()
+
+    async def _run_unary_pull_consumer(self) -> None:
+        for topic_handler in self._handlers.values():
+            topic = topic_handler.topic
+            subscription = topic_handler.sub
+            response = self._subscriber.pull(
+                request={
+                    "subscription": self._get_subscription_path(topic=topic),
+                    "max_messages": self._batch_max_messages,
+                    "return_immediately": True,
+                },
+            )
+            if len(response.received_messages) == 0:
+                log.info(f"No messages pulled for subscription {subscription}")
+                continue
+            log.info(f"Pulled {len(response.received_messages)} for subscription {subscription}")
+            for message in response.received_messages:
+                await self._process_message(message=message)
 
     async def stop(self) -> None:
         """

@@ -8,12 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 import pytest
 import pytest_asyncio
 from dishka import AsyncContainer
+from fern_labour_core.events.consumer import EventConsumer
 from google.api_core import exceptions as api_exceptions
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.futures import StreamingPullFuture
 from google.cloud.pubsub_v1.subscriber.message import Message
+from google.pubsub_v1.types import PullResponse
 
 from fern_labour_pub_sub.consumer import PubSubEventConsumer
+from fern_labour_pub_sub.enums import ConsumerMode
 from fern_labour_pub_sub.topic_handler import TopicHandler
 from tests.conftest import (
     MockDefaultEventHandler,
@@ -64,6 +67,14 @@ def mock_message() -> MagicMock:
 
 
 @pytest.fixture
+def mock_pull_response() -> MagicMock:
+    """Fixture for mocking Pub/Sub pull result."""
+    response = MagicMock(spec=PullResponse)
+    response.received_messages = []
+    return response
+
+
+@pytest.fixture
 def consumer_handlers() -> list[TopicHandler]:
     """Define handlers mapping for tests."""
     return [
@@ -91,6 +102,10 @@ async def consumer(
     )
     yield consumer
     await consumer.stop()
+
+
+def test_implementation_is_subclass() -> None:
+    assert issubclass(PubSubEventConsumer, EventConsumer)
 
 
 def test_consumer_initialization(
@@ -296,6 +311,16 @@ async def test_start_no_handlers(
     assert "No event handlers registered." in caplog.text
 
 
+async def test_start_already_running(
+    consumer: PubSubEventConsumer, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test start fails and logs error if consumer already running."""
+    consumer._running = True
+    with caplog.at_level(logging.WARNING):
+        await consumer.start()
+    assert "Consumer is already running." in caplog.text
+
+
 async def test_start_no_container(
     consumer: PubSubEventConsumer, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -358,3 +383,41 @@ async def test_is_healthy(
     mock_streaming_pull_future.running.return_value = False
     consumer._streaming_pull_futures[sub_path] = mock_streaming_pull_future
     assert await consumer.is_healthy() is False
+
+
+async def test_run_unary_pull_success(
+    consumer: PubSubEventConsumer,
+    mock_subscriber_client: MagicMock,
+    mock_pull_response: MagicMock,
+    mock_message: MagicMock,
+    container: AsyncContainer,
+) -> None:
+    """Run the consumer in unary pull mode successfully."""
+    mock_pull_response.received_messages.append(mock_message)
+
+    consumer.set_container(container)
+    consumer._mode = ConsumerMode.UNARY_PULL
+    mock_subscriber_client.pull.return_value = mock_pull_response
+
+    await consumer.start()
+
+    assert mock_message.ack.call_count == len(consumer._handlers.keys())
+
+
+async def test_run_unary_pull_no_messages(
+    consumer: PubSubEventConsumer,
+    mock_subscriber_client: MagicMock,
+    mock_pull_response: MagicMock,
+    container: AsyncContainer,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Run the consumer in unary pull mode successfully."""
+    consumer.set_container(container)
+    consumer._mode = ConsumerMode.UNARY_PULL
+    mock_subscriber_client.pull.return_value = mock_pull_response
+
+    with caplog.at_level(logging.INFO):
+        await consumer.start()
+
+    for handler in consumer._handlers.values():
+        assert f"No messages pulled for subscription {handler.sub}"
