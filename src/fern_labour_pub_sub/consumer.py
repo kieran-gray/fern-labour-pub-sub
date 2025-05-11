@@ -234,6 +234,7 @@ class PubSubEventConsumer:
                 await self.stop()
 
     async def _run_unary_pull_consumer(self) -> None:
+        self._running = True
         for topic_handler in self._handlers.values():
             topic = topic_handler.topic
             subscription = topic_handler.sub
@@ -255,6 +256,7 @@ class PubSubEventConsumer:
             log.info(f"Pulled {len(response.received_messages)} for subscription {subscription}")
             for message in response.received_messages:
                 await self._process_message(message=message)
+        await self.stop()
 
     async def stop(self) -> None:
         """
