@@ -255,7 +255,7 @@ class PubSubEventConsumer:
                 continue
             log.info(f"Pulled {len(response.received_messages)} for subscription {subscription}")
             for message in response.received_messages:
-                await self._process_message(message=message)
+                await self._process_message(message=message.message)
         await self.stop()
 
     async def stop(self) -> None:

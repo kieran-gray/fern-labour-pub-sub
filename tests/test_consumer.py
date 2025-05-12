@@ -13,7 +13,7 @@ from google.api_core import exceptions as api_exceptions
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.futures import StreamingPullFuture
 from google.cloud.pubsub_v1.subscriber.message import Message
-from google.pubsub_v1.types import PullResponse
+from google.pubsub_v1.types import PullResponse, ReceivedMessage
 
 from fern_labour_pub_sub.consumer import PubSubEventConsumer
 from fern_labour_pub_sub.enums import ConsumerMode
@@ -64,6 +64,13 @@ def mock_message() -> MagicMock:
     message.ack_id = f"projects/{TEST_PROJECT_ID}/subscriptions/event.begun.sub:#MSG123"
     message.message_id = "test-message-id-123"
     return message
+
+
+@pytest.fixture
+def mock_received_message(mock_message: MagicMock) -> MagicMock:
+    received_message = MagicMock(spec=ReceivedMessage)
+    received_message.message = mock_message
+    return received_message
 
 
 @pytest.fixture
@@ -389,11 +396,11 @@ async def test_run_unary_pull_success(
     consumer: PubSubEventConsumer,
     mock_subscriber_client: MagicMock,
     mock_pull_response: MagicMock,
-    mock_message: MagicMock,
+    mock_received_message: MagicMock,
     container: AsyncContainer,
 ) -> None:
     """Run the consumer in unary pull mode successfully."""
-    mock_pull_response.received_messages.append(mock_message)
+    mock_pull_response.received_messages.append(mock_received_message)
 
     consumer.set_container(container)
     consumer._mode = ConsumerMode.UNARY_PULL
@@ -401,7 +408,7 @@ async def test_run_unary_pull_success(
 
     await consumer.start()
 
-    assert mock_message.ack.call_count == len(consumer._handlers.keys())
+    assert mock_received_message.message.ack.call_count == len(consumer._handlers.keys())
 
 
 async def test_run_unary_pull_no_messages(
