@@ -8,8 +8,10 @@ from dishka import AsyncContainer, Scope
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.futures import StreamingPullFuture
 from google.cloud.pubsub_v1.subscriber.message import Message
+from google.pubsub_v1.types import PubsubMessage
 
 from fern_labour_pub_sub.enums import ConsumerMode
+from fern_labour_pub_sub.exceptions import MessageProcessingException
 from fern_labour_pub_sub.topic_handler import TopicHandler
 
 log = logging.getLogger(__name__)
@@ -84,7 +86,7 @@ class PubSubEventConsumer:
         subscription_path = f"{topic}.sub"
         return str(self._subscriber.subscription_path(self._project_id, subscription_path))
 
-    async def _process_message(self, message: Message) -> None:
+    async def _process_message(self, message: Message | PubsubMessage) -> None:
         try:
             data_str = message.data.decode("utf-8")
             event = json.loads(data_str)
@@ -92,8 +94,7 @@ class PubSubEventConsumer:
             log.debug(f"Message data for topic {topic}: {data_str}")
         except json.JSONDecodeError as e:
             log.exception(f"Failed to decode JSON message data for {message.data!r}", exc_info=e)
-            message.nack()
-            return
+            raise MessageProcessingException(message_id=message.message_id)
 
         subscription = f"{topic}.sub"
         topic_handler = self._handlers.get(subscription)
@@ -102,15 +103,13 @@ class PubSubEventConsumer:
                 "No handler found for message from subscription related to ack_id: "
                 f"{message.ack_id}. Attempted path match: {subscription}"
             )
-            message.nack()
-            return
+            raise MessageProcessingException(message_id=message.message_id)
 
         log.info(f"Received message for topic: {topic} (Subscription: {subscription})")
 
         if not self._container:
             log.error("Dependency injection container not set. Cannot process messages.")
-            message.nack()
-            return
+            raise MessageProcessingException(message_id=message.message_id)
 
         try:
             async with self._container(scope=Scope.REQUEST) as request_container:
@@ -118,10 +117,16 @@ class PubSubEventConsumer:
                     topic_handler.event_handler, component=topic_handler.component
                 )
                 await event_handler.handle(event)
-            message.ack()
             log.info(f"Successfully processed and ACKed message for topic: {topic}")
         except Exception as e:
             log.exception(f"Error processing message for topic {topic}.", exc_info=e)
+            raise MessageProcessingException(message_id=message.message_id)
+
+    async def _process_message_handler(self, message: Message) -> None:
+        try:
+            await self._process_message(message)
+            message.ack()
+        except MessageProcessingException:
             message.nack()
 
     def _message_callback(self, message: Message) -> None:
@@ -142,7 +147,7 @@ class PubSubEventConsumer:
             message.nack()
             return
 
-        coro = self._process_message(message)
+        coro = self._process_message_handler(message)
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
 
         self._tasks.add(future)
@@ -238,10 +243,11 @@ class PubSubEventConsumer:
         for topic_handler in self._handlers.values():
             topic = topic_handler.topic
             subscription = topic_handler.sub
+            subscription_path = self._get_subscription_path(topic=topic)
             try:
                 response = self._subscriber.pull(
                     request={
-                        "subscription": self._get_subscription_path(topic=topic),
+                        "subscription": subscription_path,
                         "max_messages": self._batch_max_messages,
                         "return_immediately": True,
                     },
@@ -253,9 +259,30 @@ class PubSubEventConsumer:
             if len(response.received_messages) == 0:
                 log.info(f"No messages pulled for subscription {subscription}")
                 continue
-            log.info(f"Pulled {len(response.received_messages)} for subscription {subscription}")
+
+            log.info(
+                f"Processing {len(response.received_messages)} messages "
+                f"for subscription {subscription}"
+            )
+            ack_ids = []
             for message in response.received_messages:
-                await self._process_message(message=message.message)
+                try:
+                    await self._process_message(message=message.message)
+                    ack_ids.append(message.ack_id)
+                except MessageProcessingException:
+                    continue
+
+            if ack_ids:
+                log.info(f"Acknowledging {len(ack_ids)} messages for subscription {subscription}")
+                self._subscriber.acknowledge(
+                    request={
+                        "subscription": subscription_path,
+                        "ack_ids": ack_ids,
+                    }
+                )
+            else:
+                log.info(f"No messages to acknowledge for subscription {subscription}")
+
         await self.stop()
 
     async def stop(self) -> None:

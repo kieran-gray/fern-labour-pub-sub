@@ -38,6 +38,7 @@ def mock_subscriber_client() -> MagicMock:
     )
     client.subscribe = Mock()
     client.close = Mock()
+    client.acknowledge = Mock()
     return client
 
 
@@ -70,6 +71,7 @@ def mock_message() -> MagicMock:
 def mock_received_message(mock_message: MagicMock) -> MagicMock:
     received_message = MagicMock(spec=ReceivedMessage)
     received_message.message = mock_message
+    received_message.ack_id = "test"
     return received_message
 
 
@@ -168,7 +170,7 @@ async def test_process_message_no_handler(
     consumer.set_container(container)
 
     with caplog.at_level(logging.ERROR):
-        await consumer._process_message(mock_message)
+        await consumer._process_message_handler(mock_message)
 
     assert "No handler found for message" in caplog.text
     mock_message.nack.assert_called_once()
@@ -187,7 +189,7 @@ async def test_process_message_json_decode_error(
     consumer.set_container(container)
 
     with caplog.at_level(logging.ERROR):
-        await consumer._process_message(mock_message)
+        await consumer._process_message_handler(mock_message)
 
     assert "Failed to decode JSON message data" in caplog.text
     mock_message.nack.assert_called_once()
@@ -199,7 +201,7 @@ async def test_process_message_no_container(
 ) -> None:
     """Test processing message when DI container is not set."""
     with caplog.at_level(logging.ERROR):
-        await consumer._process_message(mock_message)
+        await consumer._process_message_handler(mock_message)
     assert "Dependency injection container not set" in caplog.text
     mock_message.nack.assert_called_once()
 
@@ -408,7 +410,33 @@ async def test_run_unary_pull_success(
 
     await consumer.start()
 
-    assert mock_received_message.message.ack.call_count == len(consumer._handlers.keys())
+    assert mock_subscriber_client.acknowledge.call_count == len(consumer._handlers.keys())
+
+
+async def test_run_unary_pull_json_decode_error(
+    consumer: PubSubEventConsumer,
+    mock_subscriber_client: MagicMock,
+    mock_pull_response: MagicMock,
+    mock_received_message: MagicMock,
+    container: AsyncContainer,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Run the consumer in unary pull mode successfully."""
+    mock_received_message.message.data = b'{"invalid json'
+    mock_received_message.message.ack_id = (
+        f"projects/{TEST_PROJECT_ID}/subscriptions/labour.begun.sub:#MSG123"
+    )
+    mock_pull_response.received_messages.append(mock_received_message)
+
+    consumer.set_container(container)
+    consumer._mode = ConsumerMode.UNARY_PULL
+    mock_subscriber_client.pull.return_value = mock_pull_response
+
+    with caplog.at_level(logging.INFO):
+        await consumer.start()
+
+    for handler in consumer._handlers.values():
+        assert f"No messages to acknowledge for subscription {handler.sub}" in caplog.text
 
 
 async def test_run_unary_pull_no_messages(
@@ -427,4 +455,4 @@ async def test_run_unary_pull_no_messages(
         await consumer.start()
 
     for handler in consumer._handlers.values():
-        assert f"No messages pulled for subscription {handler.sub}"
+        assert f"No messages pulled for subscription {handler.sub}" in caplog.text
