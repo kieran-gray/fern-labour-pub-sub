@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from concurrent.futures import TimeoutError
 
 from fern_labour_core.events.event import DomainEvent
+from fern_labour_core.events.producer import BatchPublishResult
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future
 
@@ -63,7 +64,7 @@ class PubSubEventProducer:
         """
         return json.dumps(event.to_dict()).encode("utf-8")
 
-    async def publish(self, event: DomainEvent) -> None:
+    async def publish(self, event: DomainEvent) -> bool:
         """
         Publish a single event to Pub/Sub.
 
@@ -82,12 +83,14 @@ class PubSubEventProducer:
                 None, future.result, self._future_timeout_seconds
             )
             log.debug(f"Published event {event.id} to {topic_path} with message ID {message_id}")
+            return True
         except TimeoutError as e:
             log.critical(f"Timeout error while publishing event {event.id}", exc_info=e)
         except Exception as e:
             log.critical(f"Unexpected error while publishing event {event.id}", exc_info=e)
+        return False
 
-    async def publish_batch(self, events: Sequence[DomainEvent]) -> None:
+    async def publish_batch(self, events: Sequence[DomainEvent]) -> BatchPublishResult:
         """
         Publish multiple events to Pub/Sub.
 
@@ -96,7 +99,7 @@ class PubSubEventProducer:
         """
         if not events:
             log.debug("No events to publish in batch.")
-            return
+            return BatchPublishResult(success_ids=[], failure_ids=[])
 
         loop = asyncio.get_running_loop()
         publish_tasks = []
@@ -124,21 +127,21 @@ class PubSubEventProducer:
 
         if not publish_tasks:
             log.warning("No publish tasks were successfully created for the batch.")
-            return
+            return BatchPublishResult(success_ids=[], failure_ids=[event.id for event in events])
 
         log.info(f"Waiting for {len(publish_tasks)} publish operations to complete...")
         results = await asyncio.gather(*publish_tasks, return_exceptions=True)
 
-        published_count = 0
-        failed_count = 0
+        published = []
+        failed = []
         for i, result in enumerate(results):
             task = publish_tasks[i]
             details = event_details[task]
-            event_id = details["id"]
+            event_id: str = details["id"]
             topic_path = details["topic"]
 
             if isinstance(result, Exception):
-                failed_count += 1
+                failed.append(event_id)
                 if isinstance(result, TimeoutError):
                     log.error(f"Timed out publishing event {event_id} to {topic_path}")
                 else:
@@ -147,16 +150,16 @@ class PubSubEventProducer:
                         exc_info=result,
                     )
             else:
-                published_count += 1
+                published.append(event_id)
                 log.debug(
                     f"Successfully published event {event_id} to "
                     f"{topic_path} with message ID {result}"
                 )
 
-        if failed_count > 0:
-            log.error(f"Failed to publish {failed_count} out of {len(events)} events in the batch.")
-        if published_count > 0:
+        if failed:
+            log.error(f"Failed to publish {len(failed)} out of {len(events)} events in the batch.")
+        if published:
             log.info(
-                f"Successfully published {published_count} out of "
-                f"{len(events)} events in the batch."
+                f"Successfully published {len(published)} out of {len(events)} events in the batch."
             )
+        return BatchPublishResult(success_ids=list(published), failure_ids=list(failed))

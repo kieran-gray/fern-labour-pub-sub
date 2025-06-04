@@ -9,18 +9,24 @@ from fern_labour_core.events.event import DomainEvent
 from fern_labour_core.events.event_handler import EventHandler
 
 
-@dataclass
+@dataclass(frozen=True)
 class MockEvent(DomainEvent):
     id: str
     type: str
+    aggregate_id: str
+    aggregate_type: str
     data: dict[str, Any]
     time: datetime
 
     @classmethod
-    def create(cls, data: dict[str, Any], event_type: str = "") -> Self:
+    def create(
+        cls, aggregate_id: str, aggregate_type: str, data: dict[str, Any], event_type: str = ""
+    ) -> Self:
         return cls(
             id="evt-123",
             type=event_type,
+            aggregate_id=aggregate_id,
+            aggregate_type=aggregate_type,
             data=data,
             time=datetime(2020, 1, 1, 12),
         )
@@ -30,12 +36,21 @@ class MockEvent(DomainEvent):
         return cls(
             id=event["id"],
             type=event["type"],
+            aggregate_id=event["aggregate_id"],
+            aggregate_type=event["aggregate_type"],
             data=event["data"],
             time=datetime.fromisoformat(event["time"]),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "type": self.type, "data": self.data, "time": self.time.isoformat()}
+        return {
+            "id": self.id,
+            "type": self.type,
+            "aggregate_id": self.aggregate_id,
+            "aggregate_type": self.aggregate_type,
+            "data": self.data,
+            "time": self.time.isoformat(),
+        }
 
 
 class MockDefaultEventHandler(EventHandler):

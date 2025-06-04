@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from concurrent.futures import TimeoutError
+from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -49,7 +50,12 @@ def producer(mock_publisher_client: MagicMock) -> PubSubEventProducer:
 @pytest.fixture
 def sample_event() -> DomainEvent:
     """Fixture for a sample Event."""
-    return MockEvent.create(data={"key": "value"}, event_type="sample.event-happened")
+    return MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="sample.event-happened",
+    )
 
 
 def test_producer_initialization(mock_publisher_client: MagicMock) -> None:
@@ -82,6 +88,8 @@ def test_serialize_event(producer: PubSubEventProducer, sample_event: DomainEven
     expected_dict = {
         "id": "evt-123",
         "type": "sample.event-happened",
+        "aggregate_id": "agg123",
+        "aggregate_type": "mock",
         "data": {"key": "value"},
         "time": "2020-01-01T12:00:00",
     }
@@ -107,7 +115,9 @@ async def test_publish_success(
         mock_loop.return_value.run_in_executor = AsyncMock(return_value="mock-message-id")
 
         with caplog.at_level(logging.DEBUG):
-            await producer.publish(sample_event)
+            result = await producer.publish(sample_event)
+
+        assert result
 
         mock_publisher_client.publish.assert_called_once_with(
             topic_path, data=event_data_bytes, **attributes
@@ -138,7 +148,9 @@ async def test_publish_timeout(
         mock_loop.return_value.run_in_executor = mock_executor_timeout
 
         with caplog.at_level(logging.CRITICAL):
-            await producer.publish(sample_event)
+            result = await producer.publish(sample_event)
+
+        assert not result
 
     assert f"Timeout error while publishing event {sample_event.id}" in caplog.text
 
@@ -161,7 +173,9 @@ async def test_publish_general_exception(
         mock_loop.return_value.run_in_executor = mock_executor_value_error
 
         with caplog.at_level(logging.CRITICAL):
-            await producer.publish(sample_event)
+            result = await producer.publish(sample_event)
+
+        assert not result
 
     assert f"Unexpected error while publishing event {sample_event.id}" in caplog.text
 
@@ -174,7 +188,12 @@ async def test_publish_batch_success(
 ) -> None:
     """Test successful publish of a batch of events."""
     event1 = sample_event
-    event2 = MockEvent.create(data={"more": "data"}, event_type="Other.Event")
+    event2 = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"more": "data"},
+        event_type="Other.Event",
+    )
     events = [event1, event2]
 
     future1 = MagicMock(spec=PubSubFuture)
@@ -189,7 +208,10 @@ async def test_publish_batch_success(
     with patch("asyncio.get_running_loop") as mock_loop:
         mock_loop.return_value.run_in_executor = mock_executor
         with caplog.at_level(logging.INFO):
-            await producer.publish_batch(events)
+            result = await producer.publish_batch(events)
+
+        assert len(result.success_ids) == 2
+        assert len(result.failure_ids) == 0
 
         assert mock_publisher_client.publish.call_count == 2
         assert "Successfully published 2 out of 2 events in the batch." in caplog.text
@@ -203,9 +225,20 @@ async def test_publish_batch_partial_failure(
 ) -> None:
     """Test batch publish with one success, one timeout, and one exception."""
     event1 = sample_event  # Will succeed
-    event2 = MockEvent.create(data={"more": "data"}, event_type="Other.Event")
-    event2.id = "evt-456"
-    event3 = MockEvent.create(data={"extra": "data"}, event_type="Another.Event")
+    event2 = MockEvent(
+        id="evt-456",
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"more": "data"},
+        type="Other.Event",
+        time=datetime.now(),
+    )
+    event3 = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"extra": "data"},
+        event_type="Another.Event",
+    )
     events = [event1, event2, event3]
 
     future1 = MagicMock(spec=PubSubFuture)
@@ -225,7 +258,10 @@ async def test_publish_batch_partial_failure(
     with patch("asyncio.get_running_loop") as mock_loop:
         mock_loop.return_value.run_in_executor = mock_executor_gather_safe
         with caplog.at_level(logging.INFO):
-            await producer.publish_batch(events)
+            result = await producer.publish_batch(events)
+
+        assert len(result.success_ids) == 1
+        assert len(result.failure_ids) == 2
 
         assert mock_publisher_client.publish.call_count == 3
         assert "Successfully published 1 out of 3 events in the batch." in caplog.text
@@ -239,14 +275,27 @@ async def test_publish_batch_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test batch publish with two failures."""
-    event1 = MockEvent.create(data={"some": "data"}, event_type="First.Event")
-    event2 = MockEvent.create(data={"more": "data"}, event_type="Other.Event")
+    event1 = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"some": "data"},
+        event_type="First.Event",
+    )
+    event2 = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"more": "data"},
+        event_type="Other.Event",
+    )
     events = [event1, event2]
 
     mock_publisher_client.publish = Mock(side_effect=Exception("test"))
 
     with caplog.at_level(logging.WARNING):
-        await producer.publish_batch(events)
+        result = await producer.publish_batch(events)
+
+    assert len(result.success_ids) == 0
+    assert len(result.failure_ids) == 2
 
     assert mock_publisher_client.publish.call_count == 2
     assert "No publish tasks were successfully created for the batch." in caplog.text
@@ -257,8 +306,11 @@ async def test_publish_batch_empty(
 ) -> None:
     """Test publishing an empty batch."""
     with caplog.at_level(logging.DEBUG):
-        await producer.publish_batch([])
-        assert "No events to publish in batch." in caplog.text
+        result = await producer.publish_batch([])
+
+    assert len(result.success_ids) == 0
+    assert len(result.failure_ids) == 0
+    assert "No events to publish in batch." in caplog.text
 
 
 async def test_publish_batch_error_during_dispatch(
@@ -270,7 +322,12 @@ async def test_publish_batch_error_during_dispatch(
     """Test batch publish where an error occurs during the initial publish call
     for one event, but the other succeeds."""
     event1 = sample_event  # Will fail during dispatch
-    event2 = MockEvent.create(data={"more": "data"}, event_type="Other.Event")
+    event2 = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"more": "data"},
+        event_type="Other.Event",
+    )
     events = [event1, event2]
 
     mock_future_2 = MagicMock(spec=PubSubFuture)
