@@ -9,7 +9,7 @@ from fern_labour_core.events.event import DomainEvent
 from fern_labour_core.events.event_handler import EventHandler
 
 
-@dataclass(frozen=True)
+@dataclass
 class MockEvent(DomainEvent):
     id: str
     type: str
