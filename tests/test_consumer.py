@@ -56,7 +56,12 @@ def mock_streaming_pull_future() -> MagicMock:
 @pytest.fixture
 def mock_message() -> MagicMock:
     """Fixture for mocking Pub/Sub Message."""
-    event = MockEvent.create(data={"key": "value"}, event_type="event.begun")
+    event = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="event.begun",
+    )
     message = MagicMock(spec=Message)
     message.ack = Mock()
     message.nack = Mock()
@@ -165,7 +170,12 @@ async def test_process_message_no_handler(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test processing message when no handler matches."""
-    event = MockEvent.create(data={"key": "value"}, event_type="not-found.topic")
+    event = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="not-found.topic",
+    )
     mock_message.data = json.dumps(event.to_dict()).encode("utf-8")
     consumer.set_container(container)
 
