@@ -1,14 +1,20 @@
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import TracebackType
 from typing import Any, Self
 
 import pytest_asyncio
 from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
 from fern_labour_core.events.event import DomainEvent
 from fern_labour_core.events.event_handler import EventHandler
+from fern_labour_core.unit_of_work import UnitOfWork
 
-from fern_labour_pub_sub.idempotency_store import IdempotencyStore
+from fern_labour_pub_sub.idempotency_store import (
+    AlreadyCompletedError,
+    IdempotencyStore,
+    LockContentionError,
+)
 
 
 @dataclass
@@ -56,13 +62,40 @@ class MockEvent(DomainEvent):
 
 
 class MockIdempotencyStore(IdempotencyStore):
-    _data: dict[str, tuple[str, str, datetime]] = {}
+    _data: dict[str, tuple[str, datetime, datetime | None]] = {}
 
-    async def is_duplicate(self, key: str, context: str) -> bool:
-        if not self._data.get(key):
-            self._data[key] = (key, context, datetime.now(UTC))
-            return False
-        return True
+    async def try_claim_event(self, event_id: str) -> None:
+        existing_row = self._data.get(event_id)
+        if not existing_row:
+            self._data[event_id] = (event_id, datetime.now(UTC), None)
+            return
+
+        if existing_row[2]:
+            raise AlreadyCompletedError()
+        raise LockContentionError()
+
+    async def mark_as_completed(self, event_id: str) -> None:
+        existing_row = self._data[event_id]
+        self._data[event_id] = (event_id, existing_row[1], datetime.now(UTC))
+
+
+class MockUnitOfWork(UnitOfWork):
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        return None
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
 
 
 class MockDefaultEventHandler(EventHandler):
@@ -91,6 +124,10 @@ class MockDefaultProvider(Provider):
     @provide
     def get_mock_idempotency_store(self) -> IdempotencyStore:
         return MockIdempotencyStore()
+
+    @provide
+    def get_mock_unit_of_work(self) -> UnitOfWork:
+        return MockUnitOfWork()
 
 
 class MockEventHandlerProvider(Provider):

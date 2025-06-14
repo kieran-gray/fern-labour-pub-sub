@@ -3,8 +3,10 @@ import functools
 import json
 import logging
 from concurrent.futures import Future
+from typing import Any
 
 from dishka import AsyncContainer, Scope
+from fern_labour_core.unit_of_work import UnitOfWork
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.subscriber.futures import StreamingPullFuture
 from google.cloud.pubsub_v1.subscriber.message import Message
@@ -12,7 +14,11 @@ from google.pubsub_v1.types import PubsubMessage
 
 from fern_labour_pub_sub.enums import ConsumerMode
 from fern_labour_pub_sub.exceptions import MessageProcessingException
-from fern_labour_pub_sub.idempotency_store import IdempotencyStore
+from fern_labour_pub_sub.idempotency_store import (
+    AlreadyCompletedError,
+    IdempotencyStore,
+    LockContentionError,
+)
 from fern_labour_pub_sub.topic_handler import TopicHandler
 
 log = logging.getLogger(__name__)
@@ -122,18 +128,50 @@ class PubSubEventConsumer:
         try:
             async with self._container(scope=Scope.REQUEST) as request_container:
                 if event_id and self._idempotent:
-                    idempotency_store = await request_container.get(IdempotencyStore)
-                    if await idempotency_store.is_duplicate(key=event_id, context=subscription):
-                        return
-
-                event_handler = await request_container.get(
-                    topic_handler.event_handler, component=topic_handler.component
-                )
-                await event_handler.handle(event)
+                    await self._handle_event_idempotent(
+                        request_container=request_container,
+                        topic_handler=topic_handler,
+                        event_id=event_id,
+                        event=event,
+                    )
+                else:
+                    await self._handle_event(
+                        request_container=request_container,
+                        topic_handler=topic_handler,
+                        event=event,
+                    )
             log.info(f"Successfully processed and ACKed message for topic: {topic}")
         except Exception as e:
             log.exception(f"Error processing message for topic {topic}.", exc_info=e)
             raise MessageProcessingException(message_id=message.message_id)
+
+    async def _handle_event(
+        self, request_container: AsyncContainer, topic_handler: TopicHandler, event: dict[str, Any]
+    ) -> None:
+        event_handler = await request_container.get(
+            topic_handler.event_handler, component=topic_handler.component
+        )
+        await event_handler.handle(event)
+
+    async def _handle_event_idempotent(
+        self,
+        request_container: AsyncContainer,
+        topic_handler: TopicHandler,
+        event_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        unit_of_work = await request_container.get(UnitOfWork)
+        idempotency_store = await request_container.get(IdempotencyStore)
+        try:
+            async with unit_of_work:
+                await idempotency_store.try_claim_event(event_id)
+                await self._handle_event(
+                    request_container=request_container, topic_handler=topic_handler, event=event
+                )
+                await idempotency_store.mark_as_completed(event_id)
+        except (AlreadyCompletedError, LockContentionError) as e:
+            log.info(str(e))
+            return
 
     async def _process_message_handler(self, message: Message) -> None:
         try:

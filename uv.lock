@@ -153,16 +153,16 @@ wheels = [
 
 [[package]]
 name = "fern-labour-core"
-version = "0.2.2"
+version = "0.2.3"
 source = { registry = "https://europe-west2-python.pkg.dev/valued-vault-446719-t7/fern-labour-packages/simple/" }
-sdist = { url = "https://europe-west2-python.pkg.dev/valued-vault-446719-t7/fern-labour-packages/fern-labour-core/fern_labour_core-0.2.2.tar.gz", hash = "sha256:150a29d8ba5919f0464b7cc816e6453c75e05bcf2babe3ae266d5b5580033963" }
+sdist = { url = "https://europe-west2-python.pkg.dev/valued-vault-446719-t7/fern-labour-packages/fern-labour-core/fern_labour_core-0.2.3.tar.gz", hash = "sha256:65d45859c3533179645f91f2802a32c0cc53e299f08a5d9d2abb614540dbe2c8" }
 wheels = [
-    { url = "https://europe-west2-python.pkg.dev/valued-vault-446719-t7/fern-labour-packages/fern-labour-core/fern_labour_core-0.2.2-py3-none-any.whl", hash = "sha256:877a16624dff381889b6a26be082d45ae8a9a6503d6362eac3217c0e8fcbe132" },
+    { url = "https://europe-west2-python.pkg.dev/valued-vault-446719-t7/fern-labour-packages/fern-labour-core/fern_labour_core-0.2.3-py3-none-any.whl", hash = "sha256:188af99d78be6c0452bd4523aff4d3e1e4bf8a6d46aede91a98262ecd8f7183f" },
 ]
 
 [[package]]
 name = "fern-labour-pub-sub"
-version = "0.6.0"
+version = "0.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "dishka" },
