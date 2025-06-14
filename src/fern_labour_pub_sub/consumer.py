@@ -12,6 +12,7 @@ from google.pubsub_v1.types import PubsubMessage
 
 from fern_labour_pub_sub.enums import ConsumerMode
 from fern_labour_pub_sub.exceptions import MessageProcessingException
+from fern_labour_pub_sub.idempotency_store import IdempotencyStore
 from fern_labour_pub_sub.topic_handler import TopicHandler
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class PubSubEventConsumer:
         subscriber: pubsub_v1.SubscriberClient | None = None,
         mode: ConsumerMode = ConsumerMode.STREAMING_PULL,
         batch_max_messages: int = 50,
+        idempotent: bool = True,
     ):
         """
         Initialize PubSubEventConsumer.
@@ -39,6 +41,7 @@ class PubSubEventConsumer:
             subscriber: Optional pre-configured SubscriberClient.
             mode: Optional running mode
             batch_max_messages: Optional max messages to process in a batch in UnaryPull mode
+            idempotent: Optional idempotency mode to ensure duplicate messages are not processed
 
         Consumer modes:
             StreamingPull mode, consumer will:
@@ -57,6 +60,7 @@ class PubSubEventConsumer:
         }
         self._mode = mode
         self._batch_max_messages = batch_max_messages
+        self._idempotent = idempotent
         self._running = False
         self._container: AsyncContainer | None = None
         self._streaming_pull_futures: dict[str, StreamingPullFuture] = {}
@@ -111,8 +115,17 @@ class PubSubEventConsumer:
             log.error("Dependency injection container not set. Cannot process messages.")
             raise MessageProcessingException(message_id=message.message_id)
 
+        event_id = message.attributes.get("event_id")
+        if not event_id:
+            log.warning(f"Message {message.message_id} is missing `event_id` attribute.")
+
         try:
             async with self._container(scope=Scope.REQUEST) as request_container:
+                if event_id and self._idempotent:
+                    idempotency_store = await request_container.get(IdempotencyStore)
+                    if await idempotency_store.is_duplicate(key=event_id, context=subscription):
+                        return
+
                 event_handler = await request_container.get(
                     topic_handler.event_handler, component=topic_handler.component
                 )

@@ -1,12 +1,14 @@
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Self
 
 import pytest_asyncio
 from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
 from fern_labour_core.events.event import DomainEvent
 from fern_labour_core.events.event_handler import EventHandler
+
+from fern_labour_pub_sub.idempotency_store import IdempotencyStore
 
 
 @dataclass
@@ -53,6 +55,16 @@ class MockEvent(DomainEvent):
         }
 
 
+class MockIdempotencyStore(IdempotencyStore):
+    _data: dict[str, tuple[str, str, datetime]] = {}
+
+    async def is_duplicate(self, key: str, context: str) -> bool:
+        if not self._data.get(key):
+            self._data[key] = (key, context, datetime.now(UTC))
+            return False
+        return True
+
+
 class MockDefaultEventHandler(EventHandler):
     async def handle(self, event: dict[str, Any]) -> None:
         return
@@ -75,6 +87,10 @@ class MockDefaultProvider(Provider):
     @provide
     def get_mock_default_event_handler(self) -> MockDefaultEventHandler:
         return MockDefaultEventHandler()
+
+    @provide
+    def get_mock_idempotency_store(self) -> IdempotencyStore:
+        return MockIdempotencyStore()
 
 
 class MockEventHandlerProvider(Provider):

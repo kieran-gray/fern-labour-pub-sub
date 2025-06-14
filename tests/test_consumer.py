@@ -4,6 +4,7 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -66,7 +67,7 @@ def mock_message() -> MagicMock:
     message.ack = Mock()
     message.nack = Mock()
     message.data = json.dumps(event.to_dict()).encode("utf-8")
-    message.attributes = {"attribute_key": "attribute_value"}
+    message.attributes = {"event_id": uuid4()}
     message.ack_id = f"projects/{TEST_PROJECT_ID}/subscriptions/event.begun.sub:#MSG123"
     message.message_id = "test-message-id-123"
     return message
