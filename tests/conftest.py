@@ -62,7 +62,8 @@ class MockEvent(DomainEvent):
 
 
 class MockIdempotencyStore(IdempotencyStore):
-    _data: dict[str, tuple[str, datetime, datetime | None]] = {}
+    def __init__(self) -> None:
+        self._data: dict[str, tuple[str, datetime, datetime | None]] = {}
 
     async def try_claim_event(self, event_id: str) -> None:
         existing_row = self._data.get(event_id)

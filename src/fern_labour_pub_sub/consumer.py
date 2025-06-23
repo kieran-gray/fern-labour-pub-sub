@@ -32,22 +32,26 @@ class PubSubEventConsumer:
     def __init__(
         self,
         project_id: str,
+        container: AsyncContainer,
         topic_handlers: list[TopicHandler],
         subscriber: pubsub_v1.SubscriberClient | None = None,
         mode: ConsumerMode = ConsumerMode.STREAMING_PULL,
         batch_max_messages: int = 50,
         idempotent: bool = True,
+        health_check_interval: float = 5.0,
     ):
         """
         Initialize PubSubEventConsumer.
 
         Args:
             project_id: Google Cloud project ID.
-            topic_prefix: Prefix for Pub/Sub topics.
+            container: AsyncContainer with scope=APP.
+            topic_handlers: list of TopicHandlers.
             subscriber: Optional pre-configured SubscriberClient.
             mode: Optional running mode
             batch_max_messages: Optional max messages to process in a batch in UnaryPull mode
             idempotent: Optional idempotency mode to ensure duplicate messages are not processed
+            health_check_interval: Optional configuration for health check interval
 
         Consumer modes:
             StreamingPull mode, consumer will:
@@ -60,28 +64,19 @@ class PubSubEventConsumer:
                 - Close on completion.
         """
         self._project_id = project_id
-        self._subscriber = subscriber or pubsub_v1.SubscriberClient()
+        self._container = container
         self._handlers: dict[str, TopicHandler] = {
             handler.sub: handler for handler in topic_handlers
         }
+        self._subscriber = subscriber or pubsub_v1.SubscriberClient()
+        self._tasks: set[Future[None]] = set()
         self._mode = mode
         self._batch_max_messages = batch_max_messages
         self._idempotent = idempotent
         self._running = False
-        self._container: AsyncContainer | None = None
         self._streaming_pull_futures: dict[str, StreamingPullFuture] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._tasks: set[Future[None]] = set()
-
-    def set_container(self, container: AsyncContainer) -> None:
-        """
-        Set the dependency injection container.
-
-        Args:
-            container: AsyncContainer with scope=APP.
-        """
-        self._container = container
-        log.info("Dependency injection container set for PubSubEventConsumer.")
+        self._health_check_interval = health_check_interval
 
     def _get_subscription_path(self, topic: str) -> str:
         """
@@ -116,10 +111,6 @@ class PubSubEventConsumer:
             raise MessageProcessingException(message_id=message.message_id)
 
         log.info(f"Received message for topic: {topic} (Subscription: {subscription})")
-
-        if not self._container:
-            log.error("Dependency injection container not set. Cannot process messages.")
-            raise MessageProcessingException(message_id=message.message_id)
 
         event_id = message.attributes.get("event_id")
         if not event_id:
@@ -179,6 +170,13 @@ class PubSubEventConsumer:
             message.ack()
         except MessageProcessingException:
             message.nack()
+        except Exception as e:
+            log.exception(
+                "Unexpected error in _process_message_handler_wrapper for message:"
+                f"{message.message_id}",
+                exc_info=e,
+            )
+            message.nack()
 
     def _message_callback(self, message: Message) -> None:
         """
@@ -201,8 +199,8 @@ class PubSubEventConsumer:
         coro = self._process_message_handler(message)
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
 
+        future.add_done_callback(self._tasks.discard)
         self._tasks.add(future)
-        future.add_done_callback(lambda f: self._tasks.remove(f))
 
     def _on_future_done(self, subscription_path: str, future: StreamingPullFuture) -> None:
         """
@@ -211,10 +209,7 @@ class PubSubEventConsumer:
         """
         try:
             future.result(timeout=0)
-            log.info(
-                f"Streaming pull future for {subscription_path}"
-                " completed normally (likely cancelled)."
-            )
+            log.info(f"Streaming pull future for {subscription_path} completed normally.")
         except Exception as e:
             log.exception(f"Streaming pull future for {subscription_path} failed!", exc_info=e)
             if self._running:
@@ -235,10 +230,6 @@ class PubSubEventConsumer:
 
         if not self._handlers:
             log.error("No event handlers registered. Cannot start consumer.")
-            return
-
-        if not self._container:
-            log.error("Dependency injection container not set. Cannot start consumer.")
             return
 
         if self._mode is ConsumerMode.STREAMING_PULL:
@@ -283,10 +274,8 @@ class PubSubEventConsumer:
         )
 
         while self._running:
-            await asyncio.sleep(5)
-
-            if self._running and not self._streaming_pull_futures:
-                log.warning("Consumer is running but has no active subscriptions left. Stopping.")
+            await asyncio.sleep(self._health_check_interval)
+            if not await self.is_healthy():
                 await self.stop()
 
     async def _run_unary_pull_consumer(self) -> None:
@@ -352,8 +341,24 @@ class PubSubEventConsumer:
             log.info(f"Cancelling {len(futures_to_cancel)} subscription future(s)...")
             for future in futures_to_cancel:
                 future.cancel()
+            self._streaming_pull_futures.clear()
 
-            await asyncio.sleep(1)
+        if self._tasks:
+            log.info(f"Waiting for {len(self._tasks)} message processing tasks to complete...")
+            asyncio_tasks = [asyncio.wrap_future(task) for task in self._tasks]
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*asyncio_tasks, return_exceptions=True), timeout=10.0
+                )
+                log.info("All message processing tasks completed within timeout.")
+
+            except TimeoutError:
+                log.warning("Some message processing tasks did not complete within timeout.")
+                for task in asyncio_tasks:
+                    if not task.done():
+                        task.cancel()
+
+        self._tasks.clear()
 
         if self._subscriber:
             log.info("Closing Pub/Sub subscriber client...")
@@ -363,11 +368,7 @@ class PubSubEventConsumer:
             except Exception as e:
                 log.exception("Error closing Pub/Sub subscriber client.", exc_info=e)
 
-        self._streaming_pull_futures.clear()
-        if self._tasks:
-            log.info(f"Waiting for {len(self._tasks)} message processing tasks to complete...")
-            await asyncio.wait(self._tasks, timeout=10)  # type: ignore
-
+        self._loop = None
         log.info("PubSubEventConsumer stopped.")
 
     async def is_healthy(self) -> bool:

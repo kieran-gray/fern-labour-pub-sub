@@ -1,3 +1,5 @@
+from dishka import make_async_container
+
 from fern_labour_pub_sub.consumer import PubSubEventConsumer
 from fern_labour_pub_sub.producer import PubSubEventProducer
 
@@ -10,7 +12,9 @@ def can_instantiate_producer() -> None:
 
 
 def can_instantiate_consumer() -> None:
-    consumer = PubSubEventConsumer(project_id="test", topic_handlers=[])
+    container = make_async_container()
+
+    consumer = PubSubEventConsumer(project_id="test", topic_handlers=[], container=container)
     if not consumer:
         raise RuntimeError("Consumer instantiation failed.")
     print("Instantiated Consumer successfully.")
