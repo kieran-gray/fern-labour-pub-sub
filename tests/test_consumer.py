@@ -30,6 +30,26 @@ MODULE_PATH = "fern_labour_pub_sub.consumer"
 TEST_PROJECT_ID = "test-project"
 
 
+async def wait_for_consumer_ready(consumer: PubSubEventConsumer) -> None:
+    """Helper function to wait for consumer to be ready."""
+    for _ in range(100):
+        if consumer._running and consumer._loop is not None:
+            return
+        await asyncio.sleep(0.001)
+
+    raise TimeoutError("Consumer failed to start within expected time")
+
+
+async def wait_for_consumer_stopped(consumer: PubSubEventConsumer) -> None:
+    """Helper function to wait for consumer to be stopped."""
+    for _ in range(100):
+        if not consumer._running and consumer._loop is None:
+            return
+        await asyncio.sleep(0.001)
+
+    raise TimeoutError("Consumer failed to stop within expected time")
+
+
 @pytest.fixture
 def mock_subscriber_client() -> MagicMock:
     """Fixture for mocking SubscriberClient."""
@@ -51,6 +71,7 @@ def mock_streaming_pull_future() -> MagicMock:
     future.cancel = Mock()
     future.running = MagicMock(return_value=True)
     future.add_done_callback = MagicMock()
+    future.remove_done_callback = MagicMock()
     return future
 
 
@@ -107,13 +128,16 @@ def consumer_handlers() -> list[TopicHandler]:
 
 @pytest_asyncio.fixture
 async def consumer(
-    mock_subscriber_client: MagicMock, consumer_handlers: list[TopicHandler]
+    mock_subscriber_client: MagicMock,
+    consumer_handlers: list[TopicHandler],
+    container: AsyncContainer,
 ) -> AsyncGenerator[PubSubEventConsumer]:
     """Fixture for PubSubEventConsumer."""
     consumer = PubSubEventConsumer(
         project_id=TEST_PROJECT_ID,
         subscriber=mock_subscriber_client,
         topic_handlers=consumer_handlers,
+        container=container,
     )
     yield consumer
     await consumer.stop()
@@ -124,13 +148,16 @@ def test_implementation_is_subclass() -> None:
 
 
 def test_consumer_initialization(
-    mock_subscriber_client: MagicMock, consumer_handlers: list[TopicHandler]
+    mock_subscriber_client: MagicMock,
+    consumer_handlers: list[TopicHandler],
+    container: AsyncContainer,
 ) -> None:
     """Test consumer initializes correctly."""
     consumer = PubSubEventConsumer(
         project_id=TEST_PROJECT_ID,
         subscriber=mock_subscriber_client,
         topic_handlers=consumer_handlers,
+        container=container,
     )
     assert consumer._subscriber == mock_subscriber_client
     assert consumer._project_id == TEST_PROJECT_ID
@@ -138,18 +165,18 @@ def test_consumer_initialization(
 
 @patch(f"{MODULE_PATH}.pubsub_v1.SubscriberClient", autospec=True)
 def test_consumer_initialization_creates_client(
-    MockSubscriberClient: MagicMock, consumer_handlers: list[TopicHandler]
+    MockSubscriberClient: MagicMock,
+    consumer_handlers: list[TopicHandler],
+    container: AsyncContainer,
 ) -> None:
     """Test consumer creates a client if none provided."""
-    consumer = PubSubEventConsumer(project_id=TEST_PROJECT_ID, topic_handlers=consumer_handlers)
+    consumer = PubSubEventConsumer(
+        project_id=TEST_PROJECT_ID,
+        topic_handlers=consumer_handlers,
+        container=container,
+    )
     MockSubscriberClient.assert_called_once()
     assert consumer._subscriber == MockSubscriberClient.return_value
-
-
-def test_set_container(consumer: PubSubEventConsumer, container: AsyncContainer) -> None:
-    """Test setting the DI container."""
-    consumer.set_container(container)
-    assert consumer._container == container
 
 
 def test_get_subscription_path(consumer: PubSubEventConsumer) -> None:
@@ -166,7 +193,6 @@ def test_get_subscription_path(consumer: PubSubEventConsumer) -> None:
 
 async def test_process_message_no_handler(
     consumer: PubSubEventConsumer,
-    container: AsyncContainer,
     mock_message: MagicMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -178,7 +204,6 @@ async def test_process_message_no_handler(
         event_type="not-found.topic",
     )
     mock_message.data = json.dumps(event.to_dict()).encode("utf-8")
-    consumer.set_container(container)
 
     with caplog.at_level(logging.ERROR):
         await consumer._process_message_handler(mock_message)
@@ -188,16 +213,187 @@ async def test_process_message_no_handler(
     mock_message.ack.assert_not_called()
 
 
+async def test_process_message_successfully(
+    consumer: PubSubEventConsumer,
+    mock_message: MagicMock,
+) -> None:
+    """Test processing message successfully."""
+    event = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="event.begun",
+    )
+    mock_message.data = json.dumps(event.to_dict()).encode("utf-8")
+
+    await consumer._process_message_handler(mock_message)
+
+    mock_message.nack.assert_not_called()
+    mock_message.ack.assert_called_once()
+
+
+async def test_process_message_successfully_during_stop(
+    consumer: PubSubEventConsumer,
+    mock_message: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test processing message successfully during consumer stop process."""
+    event = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="event.begun",
+    )
+    mock_message.data = json.dumps(event.to_dict()).encode("utf-8")
+
+    task = asyncio.create_task(consumer.start())
+    await asyncio.wait_for(wait_for_consumer_ready(consumer=consumer), timeout=1.0)
+
+    with caplog.at_level(logging.INFO):
+        consumer._message_callback(mock_message)
+        await consumer.stop()
+
+    task.cancel()
+
+    assert "Waiting for 1 message processing tasks to complete..." in caplog.text
+    assert "All message processing tasks completed within timeout." in caplog.text
+
+    mock_message.nack.assert_not_called()
+    mock_message.ack.assert_called_once()
+
+
+async def test_process_message_timeout_during_stop(
+    consumer: PubSubEventConsumer,
+    mock_message: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test processing message timeout during consumer stop process."""
+    event = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="event.begun",
+    )
+    mock_message.data = json.dumps(event.to_dict()).encode("utf-8")
+
+    task = asyncio.create_task(consumer.start())
+    await asyncio.wait_for(wait_for_consumer_ready(consumer=consumer), timeout=1.0)
+
+    with caplog.at_level(logging.WARNING):
+        consumer._message_callback(mock_message)
+        with patch(
+            "fern_labour_pub_sub.consumer.asyncio.wait_for",
+            side_effect=TimeoutError("Mocked timeout"),
+        ):
+            await consumer.stop()
+
+    task.cancel()
+
+    assert "Some message processing tasks did not complete within timeout." in caplog.text
+
+    mock_message.nack.assert_not_called()
+    mock_message.ack.assert_called_once()
+
+
+async def test_consumer_stops_when_consumer_is_unhealthy(
+    consumer: PubSubEventConsumer,
+    mock_message: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test processing message successfully during consumer stop process."""
+    event = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="event.begun",
+    )
+    mock_message.data = json.dumps(event.to_dict()).encode("utf-8")
+
+    consumer._health_check_interval = 0.01
+
+    task = asyncio.create_task(consumer.start())
+    await asyncio.wait_for(wait_for_consumer_ready(consumer=consumer), timeout=1.0)
+
+    with caplog.at_level(logging.INFO):
+        consumer._subscriber = None
+
+    await asyncio.wait_for(wait_for_consumer_stopped(consumer=consumer), timeout=1.0)
+
+    task.cancel()
+
+
+async def test_process_message_successfully_no_event_id(
+    consumer: PubSubEventConsumer,
+    mock_message: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test processing message successfully without event id."""
+    event = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="event.begun",
+    )
+    mock_message.attributes = {}
+    mock_message.data = json.dumps(event.to_dict()).encode("utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        await consumer._process_message_handler(mock_message)
+
+    assert "missing `event_id` attribute" in caplog.text
+
+    mock_message.nack.assert_not_called()
+    mock_message.ack.assert_called_once()
+
+
+async def test_process_message_error_in_handling(
+    consumer: PubSubEventConsumer,
+    mock_message: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test processing message logs error when error is raised during handling."""
+    event = MockEvent.create(
+        aggregate_id="agg123",
+        aggregate_type="mock",
+        data={"key": "value"},
+        event_type="event.completed",
+    )
+    mock_message.data = json.dumps(event.to_dict()).encode("utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        await consumer._process_message_handler(mock_message)
+
+    assert "Error processing message for topic" in caplog.text
+
+    mock_message.nack.assert_called_once()
+    mock_message.ack.assert_not_called()
+
+
+async def test_process_message_invalid_data(
+    consumer: PubSubEventConsumer,
+    mock_message: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test processing message with invalid JSON data."""
+    mock_message.data = 123
+    mock_message.ack_id = f"projects/{TEST_PROJECT_ID}/subscriptions/labour.begun.sub:#MSG123"
+
+    with caplog.at_level(logging.ERROR):
+        await consumer._process_message_handler(mock_message)
+
+    assert "Unexpected error in _process_message_handler_wrapper" in caplog.text
+    mock_message.nack.assert_called_once()
+    mock_message.ack.assert_not_called()
+
+
 async def test_process_message_json_decode_error(
     consumer: PubSubEventConsumer,
-    container: AsyncContainer,
     mock_message: MagicMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test processing message with invalid JSON data."""
     mock_message.data = b'{"invalid json'
     mock_message.ack_id = f"projects/{TEST_PROJECT_ID}/subscriptions/labour.begun.sub:#MSG123"
-    consumer.set_container(container)
 
     with caplog.at_level(logging.ERROR):
         await consumer._process_message_handler(mock_message)
@@ -205,16 +401,6 @@ async def test_process_message_json_decode_error(
     assert "Failed to decode JSON message data" in caplog.text
     mock_message.nack.assert_called_once()
     mock_message.ack.assert_not_called()
-
-
-async def test_process_message_no_container(
-    consumer: PubSubEventConsumer, mock_message: MagicMock, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Test processing message when DI container is not set."""
-    with caplog.at_level(logging.ERROR):
-        await consumer._process_message_handler(mock_message)
-    assert "Dependency injection container not set" in caplog.text
-    mock_message.nack.assert_called_once()
 
 
 async def test_message_callback_success(
@@ -251,6 +437,22 @@ def test_message_callback_no_loop(
     mock_message.nack.assert_called_once()
 
 
+async def test_streaming_pull_future_fails_to_start(
+    consumer: PubSubEventConsumer,
+    mock_subscriber_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test error is logged when streaming pull future fails to start."""
+    mock_subscriber_client.subscribe.side_effect = Exception()
+
+    with caplog.at_level(logging.WARNING):
+        await consumer.start()
+
+    assert "Failed to subscribe to" in caplog.text
+    assert "No subscriptions were successfully started. Stopping consumer." in caplog.text
+    assert consumer._running is False
+
+
 def test_on_future_done_success(
     consumer: PubSubEventConsumer,
     mock_streaming_pull_future: MagicMock,
@@ -269,7 +471,7 @@ def test_on_future_done_success(
     assert sub_path not in consumer._streaming_pull_futures
 
 
-def test_on_future_done_error(
+async def test_on_future_done_error(
     consumer: PubSubEventConsumer,
     mock_streaming_pull_future: MagicMock,
     caplog: pytest.LogCaptureFixture,
@@ -280,11 +482,17 @@ def test_on_future_done_error(
     test_exception = api_exceptions.NotFound("Subscription gone")  # type: ignore
     mock_streaming_pull_future.result.side_effect = test_exception
 
+    task = asyncio.create_task(consumer.start())
+    await asyncio.wait_for(wait_for_consumer_ready(consumer=consumer), timeout=1.0)
+
     with caplog.at_level(logging.ERROR):
         consumer._on_future_done(sub_path, mock_streaming_pull_future)
 
+    task.cancel()
+
     mock_streaming_pull_future.result.assert_called_once_with(timeout=0)
     assert f"Streaming pull future for {sub_path} failed!" in caplog.text
+    assert f"Subscription {sub_path} may no longer be active due to error."
     assert sub_path not in consumer._streaming_pull_futures
 
 
@@ -294,10 +502,8 @@ async def test_start_success(
     consumer: PubSubEventConsumer,
     mock_subscriber_client: MagicMock,
     mock_streaming_pull_future: MagicMock,
-    container: AsyncContainer,
 ) -> None:
     """Test starting the consumer successfully."""
-    consumer.set_container(container)
     mock_subscriber_client.subscribe.return_value = mock_streaming_pull_future
     mock_sleep.side_effect = asyncio.CancelledError
 
@@ -318,11 +524,10 @@ async def test_start_success(
 
 
 async def test_start_no_handlers(
-    consumer: PubSubEventConsumer, container: AsyncContainer, caplog: pytest.LogCaptureFixture
+    consumer: PubSubEventConsumer, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Test start fails and logs error if no handlers registered."""
     consumer._handlers = {}
-    consumer.set_container(container=container)
 
     with caplog.at_level(logging.ERROR):
         await consumer.start()
@@ -339,17 +544,6 @@ async def test_start_already_running(
     with caplog.at_level(logging.WARNING):
         await consumer.start()
     assert "Consumer is already running." in caplog.text
-
-
-async def test_start_no_container(
-    consumer: PubSubEventConsumer, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Test start fails and logs error if DI container not set."""
-    assert consumer._container is None
-    with caplog.at_level(logging.ERROR):
-        await consumer.start()
-    assert consumer._running is False
-    assert "Dependency injection container not set." in caplog.text
 
 
 async def test_stop(
@@ -410,12 +604,10 @@ async def test_run_unary_pull_success(
     mock_subscriber_client: MagicMock,
     mock_pull_response: MagicMock,
     mock_received_message: MagicMock,
-    container: AsyncContainer,
 ) -> None:
     """Run the consumer in unary pull mode successfully."""
     mock_pull_response.received_messages.append(mock_received_message)
 
-    consumer.set_container(container)
     consumer._mode = ConsumerMode.UNARY_PULL
     mock_subscriber_client.pull.return_value = mock_pull_response
 
@@ -429,7 +621,6 @@ async def test_run_unary_pull_json_decode_error(
     mock_subscriber_client: MagicMock,
     mock_pull_response: MagicMock,
     mock_received_message: MagicMock,
-    container: AsyncContainer,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Run the consumer in unary pull mode successfully."""
@@ -439,7 +630,6 @@ async def test_run_unary_pull_json_decode_error(
     )
     mock_pull_response.received_messages.append(mock_received_message)
 
-    consumer.set_container(container)
     consumer._mode = ConsumerMode.UNARY_PULL
     mock_subscriber_client.pull.return_value = mock_pull_response
 
@@ -454,11 +644,9 @@ async def test_run_unary_pull_no_messages(
     consumer: PubSubEventConsumer,
     mock_subscriber_client: MagicMock,
     mock_pull_response: MagicMock,
-    container: AsyncContainer,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Run the consumer in unary pull mode successfully."""
-    consumer.set_container(container)
     consumer._mode = ConsumerMode.UNARY_PULL
     mock_subscriber_client.pull.return_value = mock_pull_response
 
@@ -467,3 +655,88 @@ async def test_run_unary_pull_no_messages(
 
     for handler in consumer._handlers.values():
         assert f"No messages pulled for subscription {handler.sub}" in caplog.text
+
+
+async def test_stop_not_running(
+    consumer: PubSubEventConsumer, caplog: pytest.LogCaptureFixture
+) -> None:
+    consumer._running = False
+    with caplog.at_level(logging.INFO):
+        await consumer.stop()
+    assert "PubSubEventConsumer is not running." in caplog.text
+
+
+async def test_stop_subscriber_close_error(
+    consumer: PubSubEventConsumer,
+    mock_subscriber_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    consumer._running = True
+    consumer._loop = asyncio.get_running_loop()
+    mock_subscriber_client.close.side_effect = RuntimeError("Failed to close")
+
+    async def mock_executor_propagate_error(_: Any, func: Any, *args: Any) -> None:
+        func(*args)
+
+    with caplog.at_level(logging.ERROR), patch("asyncio.get_running_loop") as mock_loop_getter:
+        mock_loop_instance = MagicMock()
+        mock_loop_instance.run_in_executor = AsyncMock(side_effect=mock_executor_propagate_error)
+        mock_loop_getter.return_value = mock_loop_instance
+        await consumer.stop()
+    assert "Error closing Pub/Sub subscriber client." in caplog.text
+    mock_subscriber_client.close.assert_called_once()  # Assert close was attempted
+
+
+async def test_run_unary_pull_pull_exception(
+    consumer: PubSubEventConsumer,
+    mock_subscriber_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    consumer._mode = ConsumerMode.UNARY_PULL
+    test_exception = api_exceptions.DeadlineExceeded("Pull timed out")  # type: ignore
+    mock_subscriber_client.pull.side_effect = test_exception
+    mock_subscriber_client.close = Mock()
+
+    async def mock_executor_close(_: Any, func: Any, *args: Any) -> None:
+        func(*args)
+        return None
+
+    with caplog.at_level(logging.ERROR), patch("asyncio.get_running_loop") as mock_loop_getter:
+        mock_loop_instance = MagicMock()
+        mock_loop_instance.run_in_executor = mock_executor_close
+        mock_loop_getter.return_value = mock_loop_instance
+        await consumer.start()
+    assert mock_subscriber_client.pull.call_count == len(consumer._handlers)
+    for handler_key in consumer._handlers:
+        handler = consumer._handlers[handler_key]
+        assert f"Failed to pull subscription {handler.sub}" in caplog.text
+    mock_subscriber_client.acknowledge.assert_not_called()
+
+
+async def test_run_unary_pull_no_messages_to_ack(
+    consumer: PubSubEventConsumer,
+    mock_subscriber_client: MagicMock,
+    mock_pull_response: MagicMock,
+    mock_received_message: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mock_received_message.message.data = b'{"invalid json for ack test'
+    mock_pull_response.received_messages = [mock_received_message]
+    consumer._mode = ConsumerMode.UNARY_PULL
+    mock_subscriber_client.pull.return_value = mock_pull_response
+    mock_subscriber_client.close = Mock()
+
+    async def mock_executor_close(_: Any, func: Any, *args: Any) -> None:
+        func(*args)
+        return None
+
+    with caplog.at_level(logging.INFO), patch("asyncio.get_running_loop") as mock_loop_getter:
+        mock_loop_instance = MagicMock()
+        mock_loop_instance.run_in_executor = mock_executor_close
+        mock_loop_getter.return_value = mock_loop_instance
+        await consumer.start()
+    assert mock_subscriber_client.pull.call_count == len(consumer._handlers)
+    mock_subscriber_client.acknowledge.assert_not_called()
+    for handler_key in consumer._handlers:
+        handler = consumer._handlers[handler_key]
+        assert f"No messages to acknowledge for subscription {handler.sub}" in caplog.text
