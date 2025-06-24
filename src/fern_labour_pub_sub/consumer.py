@@ -32,7 +32,6 @@ class PubSubEventConsumer:
     def __init__(
         self,
         project_id: str,
-        container: AsyncContainer,
         topic_handlers: list[TopicHandler],
         subscriber: pubsub_v1.SubscriberClient | None = None,
         mode: ConsumerMode = ConsumerMode.STREAMING_PULL,
@@ -45,7 +44,6 @@ class PubSubEventConsumer:
 
         Args:
             project_id: Google Cloud project ID.
-            container: AsyncContainer with scope=APP.
             topic_handlers: list of TopicHandlers.
             subscriber: Optional pre-configured SubscriberClient.
             mode: Optional running mode
@@ -64,7 +62,6 @@ class PubSubEventConsumer:
                 - Close on completion.
         """
         self._project_id = project_id
-        self._container = container
         self._handlers: dict[str, TopicHandler] = {
             handler.sub: handler for handler in topic_handlers
         }
@@ -74,9 +71,20 @@ class PubSubEventConsumer:
         self._batch_max_messages = batch_max_messages
         self._idempotent = idempotent
         self._running = False
+        self._container: AsyncContainer | None = None
         self._streaming_pull_futures: dict[str, StreamingPullFuture] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._health_check_interval = health_check_interval
+
+    def set_container(self, container: AsyncContainer) -> None:
+        """
+        Set the dependency injection container.
+
+        Args:
+            container: AsyncContainer with scope=APP.
+        """
+        self._container = container
+        log.info("Dependency injection container set for PubSubEventConsumer.")
 
     def _get_subscription_path(self, topic: str) -> str:
         """
@@ -111,6 +119,10 @@ class PubSubEventConsumer:
             raise MessageProcessingException(message_id=message.message_id)
 
         log.info(f"Received message for topic: {topic} (Subscription: {subscription})")
+
+        if not self._container:
+            log.error("Dependency injection container not set. Cannot process messages.")
+            raise MessageProcessingException(message_id=message.message_id)
 
         event_id = message.attributes.get("event_id")
         if not event_id:
@@ -230,6 +242,10 @@ class PubSubEventConsumer:
 
         if not self._handlers:
             log.error("No event handlers registered. Cannot start consumer.")
+            return
+
+        if not self._container:
+            log.error("Dependency injection container not set. Cannot start consumer.")
             return
 
         if self._mode is ConsumerMode.STREAMING_PULL:

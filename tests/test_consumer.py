@@ -137,8 +137,8 @@ async def consumer(
         project_id=TEST_PROJECT_ID,
         subscriber=mock_subscriber_client,
         topic_handlers=consumer_handlers,
-        container=container,
     )
+    consumer.set_container(container=container)
     yield consumer
     await consumer.stop()
 
@@ -150,14 +150,12 @@ def test_implementation_is_subclass() -> None:
 def test_consumer_initialization(
     mock_subscriber_client: MagicMock,
     consumer_handlers: list[TopicHandler],
-    container: AsyncContainer,
 ) -> None:
     """Test consumer initializes correctly."""
     consumer = PubSubEventConsumer(
         project_id=TEST_PROJECT_ID,
         subscriber=mock_subscriber_client,
         topic_handlers=consumer_handlers,
-        container=container,
     )
     assert consumer._subscriber == mock_subscriber_client
     assert consumer._project_id == TEST_PROJECT_ID
@@ -167,13 +165,11 @@ def test_consumer_initialization(
 def test_consumer_initialization_creates_client(
     MockSubscriberClient: MagicMock,
     consumer_handlers: list[TopicHandler],
-    container: AsyncContainer,
 ) -> None:
     """Test consumer creates a client if none provided."""
     consumer = PubSubEventConsumer(
         project_id=TEST_PROJECT_ID,
         topic_handlers=consumer_handlers,
-        container=container,
     )
     MockSubscriberClient.assert_called_once()
     assert consumer._subscriber == MockSubscriberClient.return_value
@@ -403,6 +399,22 @@ async def test_process_message_json_decode_error(
     mock_message.ack.assert_not_called()
 
 
+async def test_process_message_fails_no_container(
+    consumer: PubSubEventConsumer,
+    mock_message: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test processing message fails when container is not set."""
+    consumer._container = None
+
+    with caplog.at_level(logging.ERROR):
+        await consumer._process_message_handler(mock_message)
+
+    assert "Dependency injection container not set" in caplog.text
+    mock_message.nack.assert_called_once()
+    mock_message.ack.assert_not_called()
+
+
 async def test_message_callback_success(
     consumer: PubSubEventConsumer,
     mock_message: MagicMock,
@@ -534,6 +546,19 @@ async def test_start_no_handlers(
 
     assert consumer._running is False
     assert "No event handlers registered." in caplog.text
+
+
+async def test_start_no_container(
+    consumer: PubSubEventConsumer, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Test start fails and logs error if no container is set."""
+    consumer._container = None
+
+    with caplog.at_level(logging.ERROR):
+        await consumer.start()
+
+    assert consumer._running is False
+    assert "Dependency injection container not set" in caplog.text
 
 
 async def test_start_already_running(
